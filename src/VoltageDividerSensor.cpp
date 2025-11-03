@@ -19,15 +19,16 @@ VoltageDividerSensor::VoltageDividerSensor(unsigned int analog_pin,
 {
 }
 
-float VoltageDividerSensor::read(bool avg)
+float VoltageDividerSensor::read()
 {
     unsigned int adc = analogRead(_pin);                                    // Read the ADC value from the analog pin
     float midpoint_voltage = (adc / 4095.0f) * 3.3f;                        // Convert ADC value to voltage at midpoint
     float input_voltage = midpoint_voltage * ((_r1 + _r2) / _r2);           // Calculate input voltage using voltage divider formula
-    input_voltage *= _scale_factor;                                         // Apply scaling factor
-    input_voltage += _offset;                                               // Apply offset
+    input_voltage += _offset;                                               // Apply offset first
+    input_voltage *= _scale_factor;                                         // Then apply scaling factor
+    // input_voltage = abs(input_voltage);                                     // Ensure voltage is non-negative
 
-    if (!avg)
+    if (!_use_avg)
     {
         return input_voltage;
     }

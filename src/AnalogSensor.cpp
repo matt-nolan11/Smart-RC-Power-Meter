@@ -27,6 +27,11 @@ void AnalogSensor::setAvgWindowLength(unsigned int length)
     }
 }
 
+void AnalogSensor::useAverage(bool use_avg)
+{
+    _use_avg = use_avg;
+}
+
 void AnalogSensor::setScaleFactor(float scale_factor)
 {
     _scale_factor = scale_factor;

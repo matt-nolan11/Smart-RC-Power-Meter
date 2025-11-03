@@ -1,20 +1,6 @@
 # Smart-RC-Power-Meter
 
-Power analyzer for RC electronics, with wireless data visualization
-Currently assembled from COTS breakout boards, but intended to be integrated into a single custom PCB in the future.
-
-## Prototype Images
-
-<div style="display: flex; gap: 20px; align-items: flex-start;">
-    <figure style="margin: 0;">
-        <img src="images/with_case.jpg" alt="Smart RC power meter prototype">
-        <figcaption>Smart RC power meter prototype</figcaption>
-    </figure>
-    <figure style="margin: 0;">
-        <img src="images/without_case.jpg" alt="Internal view">
-        <figcaption>Internal electronics sled</figcaption>
-    </figure>
-</div>
+Power analyzer for RC electronics, with wireless data visualization. Currently assembled from COTS breakout boards, but intended to be integrated into a single custom PCB in the future.
 
 ## Features
 
@@ -32,3 +18,16 @@ Currently assembled from COTS breakout boards, but intended to be integrated int
 | MCU            | [Raspberry Pi Pico W](https://www.adafruit.com/product/5526) |
 | Buck Converter | [Matek mBEC12S](https://a.co/d/438nlUi)                      |
 | Current Sensor | [ACS72981KLRATR-150U3](https://www.pololu.com/product/5279)  |
+
+## Prototype Images
+
+<div style="display: flex; gap: 20px; align-items: flex-start;">
+    <figure style="margin: 0;">
+        <img src="images/with_case.jpg" alt="Smart RC power meter prototype">
+        <figcaption>Smart RC power meter prototype</figcaption>
+    </figure>
+    <figure style="margin: 0;">
+        <img src="images/without_case.jpg" alt="Internal view">
+        <figcaption>Internal electronics sled</figcaption>
+    </figure>
+</div>

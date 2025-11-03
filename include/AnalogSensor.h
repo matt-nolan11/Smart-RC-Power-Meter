@@ -25,6 +25,10 @@ public:
     /// @param length the new length of the moving average window
     void setAvgWindowLength(unsigned int length);
 
+    /// @brief Enable or disable the use of moving average
+    /// @param use_avg true to use moving average, false for raw readings
+    void useAverage(bool use_avg);
+
     /// @brief Set the scaling factor for the measurement
     /// @param scale_factor the new scaling factor
     void setScaleFactor(float scale_factor);
@@ -35,8 +39,10 @@ public:
 
 protected:
     const unsigned int _pin; // Analog pin the sensor is connected to
-    unsigned int _avg_window_length; // Length of the moving average window
+    float _scale_factor;     // Scaling factor for the measurement
+    float _offset;           // Offset for calibration
+
+    bool _use_avg = false;
+    unsigned int _avg_window_length;   // Length of the moving average window
     std::deque<float> _rolling_window; // Deque to store the {_avg_window_length} most recent readings
-    float _scale_factor; // Scaling factor for the measurement
-    float _offset; // Offset for calibration
 };

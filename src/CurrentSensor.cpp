@@ -15,14 +15,15 @@ CurrentSensor::CurrentSensor(unsigned int analog_pin,
 {
 }
 
-float CurrentSensor::read(bool avg)
+float CurrentSensor::read()
 {
     unsigned int adc = analogRead(_pin);             // Read the ADC value from the analog pin
     float current = 187.5f * (adc / 4095.0f - 0.1f); // Convert ADC value to current in amps (from https://www.pololu.com/product/5279)
-    current *= _scale_factor;                        // Apply scaling factor
-    current += _offset;                              // Apply offset
+    current += _offset;                              // Apply offset first
+    current *= _scale_factor;                        // Then apply scaling factor
+    // current = abs(current);                          // Ensure current is non-negative
 
-    if (!avg)
+    if (!_use_avg)
     {
         return current;
     }

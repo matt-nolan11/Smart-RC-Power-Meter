@@ -24,7 +24,6 @@ public:
     CurrentSensor(unsigned int analog_pin, float scale_factor = 1.0f, float offset = 0.0f, unsigned int avg_window_length = 10);
 
     /// @brief Read the current from the sensor
-    /// @param avg whether to return the moving average (true) or raw reading (false)
     /// @return the current measurement in amps
-    float read(bool avg = false);
+    float read();
 };

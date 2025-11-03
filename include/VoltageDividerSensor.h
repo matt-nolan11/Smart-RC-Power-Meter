@@ -28,9 +28,8 @@ public:
     VoltageDividerSensor(unsigned int analog_pin, unsigned int r1, unsigned int r2, float scale_factor = 1.0f, float offset = 0.0f, unsigned int avg_window_length = 10);
 
     /// @brief Read the voltage from the sensor
-    /// @param avg whether to return the moving average (true) or raw reading (false)
     /// @return the voltage measurement in volts
-    float read(bool avg = false);
+    float read();
 
 private:
     unsigned int _r1; // First resistor value (ohms)
