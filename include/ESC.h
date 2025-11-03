@@ -66,9 +66,7 @@ private:
     uint8_t _motor_poles;
     dshotSpeed _dshot_speed;
 
-
-    // Telemetry variables
-    telemData _telemetry;
+    telemData _telemetry; // Telemetry struct
 
     // ESC communication objects
     BidirDShotX1* _dshot; // DSHOT communication object (dynamically allocated)
