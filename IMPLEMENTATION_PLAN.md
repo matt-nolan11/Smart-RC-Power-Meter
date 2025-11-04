@@ -2,7 +2,7 @@
 
 **Status:** Planning Phase  
 **Target Architecture:** BLE + GitHub Pages Web App  
-**Last Updated:** November 2, 2025
+**Last Updated:** November 3, 2025
 
 ---
 
@@ -31,7 +31,7 @@
 - **UI Element:** Radio button or toggle switch
 - **State:** Mode selection persists in localStorage
 
-#### 1.2 DSHOT Mode Configuration (Optional)
+#### 1.2 DSHOT-Specific Settings (Optional, only if DSHOT selected)
 - **Effective Diameter:** For tip speed calculation
   - Numeric input with unit selector
   - Units: inches (default), mm, cm
@@ -43,29 +43,10 @@
 - **Tip Speed Display Units:**
   - Dropdown selector: mph (default), m/s, km/h, ft/s
   - Stored in localStorage per device
-- **UI Note:** "Optional: Configure for advanced DSHOT metrics"
-
-#### 1.2 DSHOT Mode Configuration (Optional)
-- **Effective Diameter:** For tip speed calculation
-  - Numeric input with unit selector
-  - Units: inches (default), mm, cm
+- **Motor Poles:**
+  - Numeric input (default: 14)
   - Stored in localStorage per device
-- **Moment of Inertia (MOI):** For kinetic energy calculation
-  - Numeric input with unit selector
-  - Units: kg·mm² (default), kg·cm², kg·m², g·cm²
-  - Stored in localStorage per device
-- **Tip Speed Display Units:**
-  - Dropdown selector: mph (default), m/s, km/h, ft/s
-  - Stored in localStorage per device
-- **UI Note:** "Optional: Configure for advanced DSHOT metrics"
-
-#### 1.3 ESC Type Configuration
-- **Options:**
-  - Unidirectional (default) - Throttle range: stop to full forward
-  - Bidirectional - Throttle range: full reverse to stop to full forward
-- **Impact:** Affects throttle mapping and zero-speed value
-- **UI Element:** Radio button or toggle switch
-- **Implementation Note:** Requires `ESC::stop()` function to be implemented
+- **UI Note:** "Optional: Configure for calculating tip speed and kinetic energy metrics"
 
 #### 1.3 ESC Type Configuration
 - **Options:**
@@ -85,30 +66,6 @@
   - Main slider (large, touch-friendly)
   - Current value display (e.g., "1500μs")
   - Min/max input fields (numeric, μs units)
-
-#### 1.4 Throttle Control
-- **Primary Control:** Slider with live value display
-- **Range Configuration:**
-  - Minimum: 500μs (configurable)
-  - Maximum: 2500μs (configurable)
-  - Default: 1000μs - 2000μs
-- **UI Elements:**
-  - Main slider (large, touch-friendly)
-  - Current value display (e.g., "1500μs")
-  - Min/max input fields (numeric, μs units)
-
-#### 1.5 Ramp Control (Slew Rate Limiting)
-- **Purpose:** Gradual throttle changes to prevent sudden motor starts
-- **Parameters:**
-  - Ramp-up rate (μs/second)
-  - Ramp-down rate (μs/second)
-  - Enable/disable toggle
-- **Default:** Enabled with moderate rate (TBD during testing)
-- **Implementation:** Firmware-side interpolation between commanded and actual throttle
-- **UI Elements:**
-  - Enable/disable checkbox
-  - Separate sliders or numeric inputs for up/down rates
-  - Visual indicator of commanded vs actual throttle
 
 #### 1.5 Ramp Control (Slew Rate Limiting)
 - **Purpose:** Gradual throttle changes to prevent sudden motor starts
@@ -143,29 +100,7 @@
     - Optional: Audio alert (browser beep)
 - **Implementation:** 
   - Firmware-side monitoring (more reliable)
-  - Web app shows warning/cutoff state
-  - User can disable protection (checkbox: "Disable battery protection") with confirmation dialog
-
-#### 1.6 Battery Protection
-- **Purpose:** Prevent over-discharge by stopping ESC when voltage drops too low
-- **Configuration:**
-  - Cell count: Dropdown or numeric input (1S-12S, default: 4S)
-  - Low-voltage cutoff per cell: Numeric input (default: 3.2V/cell)
-  - UI note: "⚠️ Recommended: Keep above 3.0V to preserve battery health"
-  - Warning delta: Numeric input (default: 0.2V per cell)
-  - Total cutoff voltage = cells × cutoff_per_cell (e.g., 4S × 3.2V = 12.8V)
-  - Total warning voltage = cells × (cutoff_per_cell + warning_delta) (e.g., 4S × 3.4V = 13.6V)
-- **Behavior:**
-  - **Warning State** (voltage < warning threshold):
-    - Yellow banner: "⚠️ Battery voltage low (13.5V) - approaching cutoff (12.8V)"
-    - Continue operation but alert user
-  - **Cutoff State** (voltage < cutoff voltage):
-    - Automatically call `ESC::stop()`
-    - Red banner: "🛑 Battery cutoff reached - ESC stopped at 12.7V"
-    - Disable START button until voltage recovers or settings changed
-    - Optional: Audio alert (browser beep)
-- **Implementation:** 
-  - Firmware-side monitoring (more reliable)
+  - Filter out transient dips to avoid false triggers
   - Web app shows warning/cutoff state
   - User can disable protection (checkbox: "Disable battery protection") with confirmation dialog
 
@@ -190,11 +125,11 @@
 - Commanded Throttle (μs)
 - Power (W) - calculated: V × I
 
-**Update Rate:** 10 Hz (100ms intervals)
+**Update Rate:** 50 Hz (20ms intervals)
 
 #### 2.2 DSHOT Mode Data
 **All PWM mode data PLUS ESC telemetry:**
-- RPM (calculated from ERPM)
+- RPM (calculated from ERPM and motor poles in firmware)
 - ESC Voltage (V) - from telemetry
 - ESC Current (A) - from telemetry
 - ESC Temperature (°C)
@@ -213,7 +148,7 @@
   - Display units: Joules (J)
   - Example: 5000 kg·mm² MOI @ 10,000 RPM = 274 J
 
-**Update Rate:** 10 Hz (limited by BLE throughput)
+**Update Rate:** 50 Hz goal (20ms intervals)
 
 #### 2.3 BLE Characteristic Design
 **Approach 1: Individual Characteristics (simpler)**
@@ -269,43 +204,76 @@ Plot 4: Tip Speed (mph) + Kinetic Energy (J) - dual axis
 - **DSHOT Only:** RPM, ESC Voltage, ESC Current, ESC Temperature, ESC Status, ESC Stress
 - **DSHOT + Config:** Tip Speed (requires diameter), Kinetic Energy (requires MOI)
 
-#### 3.5 Plot Presets (Phase 2)
-- Save/load plot configurations
-- Pre-defined templates (e.g., "Power Analysis", "ESC Health")
+#### 3.5 Default Plot Configuration
+- **On First Connect:** Automatically create one plot
+- **Configuration:**
+  - Left Y-axis: Voltage (V)
+  - Right Y-axis: Current (A)
+  - 10 second time window
+- **User Can:** Remove, modify, or add more plots
+- **Persistence:** Saved in localStorage per device
 
 ---
 
-### 4. CSV Export
+### 4. Data Logging & Export
 
 #### 4.1 Data Selection
 - **UI:** Checkbox list of all available data items
 - **Defaults:** All items checked
 - **Include:**
   - Timestamp (ms since session start OR absolute time)
-  - Any subset of: voltage, current, power, throttle, RPM, temp, etc.
+  - Any subset of: voltage, current, power, throttle, RPM, temp, tip speed, kinetic energy, etc.
 
-#### 4.2 Export Trigger
-- **Button:** "Export to CSV" (prominent placement)
-- **Data Source:** 
-  - Option A: Export buffered data from current session
-  - Option B: Real-time logging toggle (start/stop recording)
-- **Decision:** Option B (explicit logging control)
+#### 4.2 Recording & Buffer Management
+- **Recording Control:**
+  - "Start Recording" button (changes to "Stop Recording")
+  - Recording indicator (red dot or similar)
+  - Data point counter (e.g., "1,234 samples recorded")
+- **Data Buffer:**
+  - Store all data in memory array during recording
+  - Buffer persists after recording stops
+  - Multiple test runs can be saved (named sessions)
+  - Clear buffer option
 
-#### 4.3 File Format
+#### 4.3 Post-Test Analysis
+- **Behavior:** When NOT recording, plots display buffered data
+- **Features:**
+  - Add/remove/reconfigure plots with historical data
+  - Change Y-axis assignments
+  - Zoom and pan (chartjs-plugin-zoom)
+  - All plot controls remain available
+  - No separate UI mode - same interface
+- **Implementation:**
+  - Chart data source switches from streaming to static array
+  - Enable zoom/pan plugin when not recording
+  - Disable streaming plugin when not recording
+  - User can freely experiment with plot configurations
+
+#### 4.4 CSV Export
+- **Button:** "Export to CSV" (available anytime data is in buffer)
+- **Selective Export:** Only export checked data items
+- **Multiple Exports:** Can export same buffer multiple times with different selections
+- **Filename Format:** `[DeviceName]_[YYYY-MM-DD]_[HH-MM-SS].csv`
+  - Spaces in device name replaced with dashes
+  - Example: `Power-Meter-1_2025-11-03_14-30-45.csv`
+- **Timestamp Column:** Relative time (ms since recording start)
+- **File Format:**
 ```csv
 Timestamp (ms), Voltage (V), Current (A), Power (W), Throttle (μs), RPM, Temp (°C)
 0, 12.34, 5.67, 69.99, 1500, 0, 25
 100, 12.35, 5.68, 70.15, 1500, 0, 25
+200, 12.36, 5.69, 70.31, 1500, 0, 25
 ...
 ```
 
-#### 4.4 Logging Control
+#### 4.5 Logging Control
 - **UI Elements:**
-  - "Start Recording" button (changes to "Stop Recording")
-  - Recording indicator (red dot or similar)
+  - "Start Recording" / "Stop Recording" button
+  - Recording indicator (red dot)
   - Data point counter (e.g., "1,234 samples recorded")
-- **Buffer:** Store in browser memory (IndexedDB for large datasets?)
-- **Limits:** Max recording time or sample count (prevent memory overflow)
+- **Buffer:** Store in browser memory during recording
+- **Limits:** Track memory usage, warn if approaching browser limits
+- **Persistence:** Buffer persists until user clears or reloads page
 
 ---
 
@@ -314,11 +282,13 @@ Timestamp (ms), Voltage (V), Current (A), Power (W), Throttle (μs), RPM, Temp (
 #### 5.1 Real-Time Data Cards
 - **Purpose:** Show current values for selected metrics without plotting
 - **UI:** Card-based layout with large, readable numbers
+- **Default Cards:** On first connect, show Voltage, Current, and Power
 - **Management:**
   - "Add Data View" button
   - Each card has remove button (X)
   - Dropdown to select which metric to display
   - Configurable: units, precision, color-coding
+- **Persistence:** Card configuration saved in localStorage per device
 
 #### 5.2 Example Data Cards
 ```
@@ -343,18 +313,20 @@ Timestamp (ms), Voltage (V), Current (A), Power (W), Throttle (μs), RPM, Temp (
 ### 6. Device Management (Multi-Device Support)
 
 #### 6.1 Device Naming
-- **On Connection:** User prompted to name device (default: "Power Meter 1")
+- **On Connection:** User prompted to name device (default: "Power Meter 1", "Power Meter 2", etc.)
 - **Persistence:** Name stored in localStorage, associated with BLE device MAC
 - **UI:** 
   - Device name shown in header
   - Editable via settings icon
   - Used in plot titles, CSV filenames
+- **CSV Filename Sanitization:** Spaces replaced with dashes
+  - Input: "Test Bench Motor 1"
+  - CSV: `Test-Bench-Motor-1_2025-11-03_14-30-45.csv`
 
 #### 6.2 Multi-Device Connection
 - **UI Flow:**
   - "Connect Device" button (can click multiple times)
-  - Each connected device gets own tab or panel
-  - Switch between devices via tabs
+  - Each connected device gets own panel
 - **Data Isolation:**
   - Each device has independent plots and data views
   - Recording state per device
@@ -364,17 +336,57 @@ Timestamp (ms), Voltage (V), Current (A), Power (W), Throttle (μs), RPM, Temp (
   - Battery configuration stored per device (cells, cutoff, warning delta)
   - ESC settings (mode, type, ramp) stored per device
   - Throttle range settings stored per device
-  - DSHOT config stored per device (diameter, MOI, tip speed units)
+  - DSHOT config stored per device (diameter, MOI, motor pole count, tip speed units)
+  - Plot configurations stored per device
+  - Data card selections stored per device
   - Settings persist across page reloads and reconnections
   - Clear settings option available in UI
+- **BLE Device Discovery:**
+  - Show signal strength (RSSI) during scanning
+  - Show device name if advertised
+  - Show MAC address (last 4 digits)
+  - Sort by signal strength
 
 #### 6.3 CSV Filename Format
 ```
 [DeviceName]_[YYYY-MM-DD]_[HH-MM-SS].csv
-Example: PowerMeter1_2025-11-02_14-30-45.csv
+Example: Power-Meter-1_2025-11-02_14-30-45.csv
+Note: Spaces in device name replaced with dashes
 ```
 
-### 7. Web App UI Layout (Draft)
+### 7. Settings Synchronization Strategy
+
+#### 7.1 Device Settings (Batch on START)
+**Settings sent to Pico W firmware when user clicks START button:**
+- ESC mode (PWM/DSHOT)
+- ESC type (unidirectional/bidirectional)
+- Throttle range (min/max μs)
+- Ramp settings (up rate, down rate, enable/disable)
+- Battery protection (cells, cutoff, warning delta, enable/disable)
+- DSHOT config (motor pole count)
+
+**Rationale:**
+- Prevents mid-test configuration changes
+- Atomic update of all device parameters
+- User can adjust settings while stopped, apply on next START
+
+#### 7.2 Web App Settings (Apply Immediately)
+**Settings that only affect web UI, applied instantly:**
+- Plot configurations (add/remove, Y-axis assignments)
+- Data card selections (add/remove, metric selection)
+- Tip speed display units (mph, m/s, etc.)
+- Propeller diameter (for calculation)
+- MOI (for calculation)
+- CSV export selections
+
+**Rationale:**
+- No impact on device operation
+- Better UX (instant feedback)
+- Can experiment with visualizations during live recording
+
+---
+
+### 8. Web App UI Layout (Draft)
 
 **Responsive Design:** Adapts between mobile (single column) and desktop (multi-column)
 
@@ -547,24 +559,42 @@ Example: PowerMeter1_2025-11-02_14-30-45.csv
 - [ ] Web App: Live data card system (add/remove cards)
 - [ ] Web App: Metric selection dropdown for each card
 - [ ] Web App: Card layout (responsive grid)
-- [ ] Web App: Implement plot management (add/remove)
-- [ ] Web App: Chart.js integration with real-time config
+- [ ] Web App: Plot management (add/remove plots)
+- [ ] Web App: Chart.js integration
+  - chartjs-plugin-streaming for real-time
+  - chartjs-plugin-zoom for post-test interaction
+  - Dual-axis support
+  - Auto-scaling logic
+- [ ] Web App: Plot data source switching
+  - Streaming mode: Live data from BLE
+  - Static mode: Historical data from buffer
+  - Automatic switching based on recording state
 - [ ] Web App: Y-axis data selection UI
-- [ ] Web App: Dual-axis support
-- [ ] Web App: Auto-scaling logic
 - [ ] Web App: Device name in plot titles
-- [ ] Test: Performance with 3+ plots + 8+ data cards
+- [ ] Web App: Plot configuration persists when switching modes
+- [ ] Test: Performance with 2-5 live plots at 10Hz
+- [ ] Test: Post-test plot reconfiguration with buffered data
+- [ ] Test: Zoom/pan on historical data
 
 ### Phase 5: Data Logging & Export
-**Goal:** CSV export with user-selectable data and device naming
+**Goal:** Recording with buffer management and CSV export
 
 - [ ] Web App: Recording state management (per device)
-- [ ] Web App: Data buffering (in-memory array)
+- [ ] Web App: Data buffering in memory
+  - Array-based storage during recording
+  - Multiple named test sessions
+  - Buffer persistence until cleared
+- [ ] Web App: Automatic plot mode switching
+  - Streaming → Static when recording stops
+  - Enable zoom/pan in static mode
+  - Preserve plot configurations
 - [ ] Web App: CSV generation with device name prefix
 - [ ] Web App: Dynamic filename generation (device_date_time.csv)
 - [ ] Web App: Selective data export UI
 - [ ] Test: Large dataset exports (1000+ samples)
 - [ ] Test: Multi-device CSV exports with correct naming
+- [ ] Test: Memory management with long recordings
+- [ ] Test: Plot reconfiguration with buffered data
 
 ### Phase 6: Multi-Device Support
 **Goal:** Connect to multiple power meters simultaneously with persistent settings
@@ -605,66 +635,97 @@ Example: PowerMeter1_2025-11-02_14-30-45.csv
 
 ## Technical Decisions to Make
 
-### 1. BLE Data Structure
-**Question:** Individual characteristics vs packed struct?  
-**Considerations:** 
+### 1. BLE Data Structure ✅ DECIDED
+**Decision:** Packed binary struct in single characteristic  
+**Rationale:** 
 - BLE throughput limit: ~20 notifications/second
-- 10 Hz × 8 data items = 80 notifications/second (won't work)
-- **Likely Decision:** Packed binary struct in single characteristic
+- 10 Hz × 8+ data items = 80+ notifications/second (won't work with individual characteristics)
+- Packed struct allows atomic updates and efficient bandwidth usage
+- Will need separate structs for PWM vs DSHOT mode (different data sizes)
 
-### 2. ESC Stop Implementation
-**Question:** How to implement `ESC::stop()` for unidirectional vs bidirectional?  
-**Unidirectional:** Send 1000μs (or configured minimum)  
-**Bidirectional:** Send 1500μs (center/zero throttle)  
-**Action:** Add enum to ESC class for type, implement conditional logic
+### 2. ESC Stop Implementation ✅ DECIDED
+**Decision:** Mode-dependent stop commands  
+**PWM Mode:**
+- Unidirectional: Send 1000μs (configured minimum)
+- Bidirectional: Send 1500μs (center/zero throttle)
+**DSHOT Mode:**
+- Both modes: Send special DSHOT command 0 (motor stop)
+**Implementation:**
+- Add `escType` enum to ESC class (unidirectional/bidirectional)
+- Implement `ESC::stop()` with conditional logic based on mode + type
+- **Status:** Ready to implement in firmware
 
-### 3. Ramp Implementation Location
-**Question:** Firmware or web app?  
-**Firmware (Recommended):** 
-- Pro: Works even if BLE connection drops
-- Pro: More precise timing
-- Con: More complex firmware
-**Web App:**
-- Pro: Easier to modify
-- Con: Depends on reliable BLE connection
+### 3. Ramp Implementation Location ✅ DECIDED
+**Decision:** Firmware-side implementation  
+**Rationale:**
+- Works even if BLE connection drops (safety)
+- More precise timing control
+- Web app sends ramp settings (up rate, down rate, enable/disable) via BLE
+- Firmware interpolates between commanded and actual throttle
+**Implementation:**
+- BLE characteristics for ramp settings (write from web app)
+- Firmware tracks commanded vs actual throttle
+- Apply slew rate limiting in loop() based on settings
+- **Status:** Ready to implement in firmware
 
-### 4. Battery Protection Implementation
-**Question:** Where to implement low-voltage monitoring?  
-**Firmware (Recommended):**
-- Pro: Works even if BLE disconnects (safety-critical)
-- Pro: Can immediately stop ESC
-- Con: Requires sending cutoff settings to Pico W
-**Web App:**
-- Pro: Easier to implement
-- Con: Unsafe if connection drops during test
+### 4. Battery Protection Implementation ✅ DECIDED
+**Decision:** Firmware-side monitoring  
+**Rationale:**
+- Safety-critical feature - must work if BLE disconnects
+- Firmware can immediately stop ESC when cutoff reached
+- Web app sends battery settings (cells, cutoff, warning delta) via BLE
+- Firmware monitors voltage and maintains state (normal/warning/cutoff)
+- Web app displays current battery state via BLE notifications
+**Implementation:**
+- BLE characteristics for battery settings (write from web app)
+- BLE characteristic for battery state (notify to web app)
+- Firmware enum: `NORMAL`, `WARNING`, `CUTOFF`
+- Auto-stop ESC when cutoff reached
+- **Status:** Ready to implement in firmware
 
-### 5. Web Framework Choice
-**Question:** Vanilla JS, React, or Vue?  
-**Vanilla JS:**
-- Pro: No build step, lightweight
-- Con: More boilerplate for state management
-**React/Vue:**
-- Pro: Better state management, component reusability
-- Con: Requires build step (Vite/Webpack)
-**Recommendation:** Start vanilla, migrate if complexity grows
+### 5. Web Framework Choice ✅ DECIDED
+**Decision:** React + TypeScript + Vite  
+**Rationale:**
+- Multi-device state management requires robust framework
+- TypeScript provides type safety for BLE packed structs
+- React's component model ideal for reusable plots/cards
+- Vite provides fast builds (~2-3s) and HMR
+- Large ecosystem for Web Bluetooth + charting integration
+**Implementation:**
+- Use React hooks for state (useState, useContext, useReducer)
+- Context API for global device management
+- localStorage hook for persistence
+- **Status:** Architecture ready to begin
 
-### 6. Chart Library
-**Options:** Chart.js, Plotly.js, uPlot, Dygraphs  
-**Recommendation:** Chart.js (good balance of features & simplicity)
+### 6. Chart Library ✅ DECIDED
+**Decision:** Chart.js for all visualization (live + post-test)  
+**Rationale:**
+- Consistent visual style between live and analysis
+- Handles 10Hz × 2-5 plots at 60fps
+- Polished styling with good defaults
+- chartjs-plugin-streaming for real-time
+- chartjs-plugin-zoom for post-test interactivity
+- Lightweight (~200KB + plugins)
+- Simple mode switching: streaming mode ↔ static mode
+**Implementation:**
+- Live streaming: Enable streaming plugin, animation: false
+- Post-test: Disable streaming, load all data, enable zoom/pan
+- Same plot components, just different data source
+- **Status:** Single-library architecture ready
 
 ---
 
-## Open Questions
+## Open Questions - RESOLVED ✅
 
-1. **Calibration UI:** Should users be able to adjust sensor calibration from web app (and store in localStorage)?
-2. **Data Sync:** Should CSV exports include absolute timestamps (RTC) or relative (ms since start)?
-3. **Plot Presets:** How many default templates, and what should they show? Should these persist in localStorage?
-4. **Default Data Cards:** Should some data cards (e.g., Voltage, Current, Power) be shown by default on first connect?
-5. **Device Discovery:** Should web app show signal strength or other BLE info when scanning?
-6. **Max Devices:** Should we limit concurrent connections (e.g., max 4 devices)?
-7. **Default Device Names:** What should be the default naming pattern? "Power Meter 1", "Power Meter 2", etc.?
-8. **Settings Sync:** Should changing settings in web app immediately write to device via BLE, or batch on START?
-9. **localStorage Cleanup:** Should we automatically clear device settings older than X days/weeks?
+1. **Calibration UI:** ✅ No - Keep calibration in firmware only
+2. **Data Sync:** ✅ Relative timestamps (ms since recording start)
+3. **Plot Presets:** ✅ One default plot: Voltage (left Y-axis) + Current (right Y-axis)
+4. **Default Data Cards:** ✅ Show Voltage, Current, and Power cards by default
+5. **Device Discovery:** ✅ Yes - Show signal strength or other BLE info during scanning
+6. **Max Devices:** ✅ No limit needed - not expected to be an issue
+7. **Default Device Names:** ✅ "Power Meter 1", "Power Meter 2", etc. (spaces → dashes in CSV filenames)
+8. **Settings Sync:** ✅ Device settings batch on START, UI settings apply immediately
+9. **localStorage Cleanup:** ✅ No automatic cleanup needed
 
 ---
 
@@ -672,7 +733,7 @@ Example: PowerMeter1_2025-11-02_14-30-45.csv
 
 ### Minimum Viable Product (MVP)
 - [ ] User can connect via BLE in <30 seconds
-- [ ] Real-time voltage/current displayed at 10 Hz
+- [ ] Real-time voltage/current displayed at 50 Hz
 - [ ] User can control ESC throttle via slider
 - [ ] START/STOP button works reliably
 - [ ] At least one live plot updates smoothly
