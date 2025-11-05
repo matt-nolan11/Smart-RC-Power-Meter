@@ -119,13 +119,15 @@
 ### 2. Data Streaming
 
 #### 2.1 PWM Mode Data
-**Transmitted from Pico W to Web App:**
+**Transmitted from Pico W to Web App (Raw Values):**
 - Voltage (V)
 - Current (A)
 - Commanded Throttle (μs)
-- Power (W) - calculated: V × I
 
-**Update Rate:** 50 Hz (20ms intervals)
+**Calculated on Web App:**
+- Power (W) = V × I
+
+**Update Rate:** 200 Hz minimum (5ms intervals) - BLE 5.2 capable
 
 #### 2.2 DSHOT Mode Data
 **All PWM mode data PLUS ESC telemetry:**
@@ -491,16 +493,23 @@ Note: Spaces in device name replaced with dashes
 ## Implementation Phases
 
 ### Phase 1: Core Infrastructure (MVP)
-**Goal:** Basic BLE connection + live data display
+**Goal:** Basic BLE connection + live data display at 200 Hz
 
-- [ ] Pico W: BLE GATT server with basic characteristics
-  - Voltage, current, power characteristics
-  - Single notification characteristic (packed struct)
+- [ ] Pico W: BLE GATT server with packed struct notifications
+  - PWM data packet (10 bytes: voltage, current, throttle)
+  - Single notification characteristic for efficiency
+  - 200 Hz update rate (5ms intervals)
+  - BLE 5.2 connection parameters (7.5ms min interval)
 - [ ] Pico W: Existing sensor code integration
-- [ ] Web App: Basic HTML/CSS/JS structure
-- [ ] Web App: BLE connection flow
+  - Non-blocking sensor reads
+  - Timed notifications in main loop
+- [ ] Web App: React + TypeScript + Vite project setup
+- [ ] Web App: BLE Web API connection flow
+- [ ] Web App: TypeScript interfaces for data packets
 - [ ] Web App: Live data display (numeric values only)
-- [ ] Test: Verify data streaming reliability
+- [ ] Web App: Client-side calculations (power = V × I)
+- [ ] Test: Verify 200 Hz streaming reliability
+- [ ] Test: Measure actual data rate and latency
 
 ### Phase 2: ESC Control
 **Goal:** User can control ESC from web interface with battery protection
