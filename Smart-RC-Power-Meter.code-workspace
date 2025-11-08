@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../Power-Meter-Web-App"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"numeric": "cpp"
+		}
+	}
+}

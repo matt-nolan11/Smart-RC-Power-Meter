@@ -21,6 +21,12 @@ public:
         PWM
     };
 
+    enum escType
+    {
+        UNIDIRECTIONAL,
+        BIDIRECTIONAL
+    };
+
     enum dshotSpeed
     {
         DSHOT150 = 150,
@@ -30,9 +36,41 @@ public:
         DSHOT2400 = 2400
     };
 
+    // DSHOT special commands (values 0-47 are reserved)
+    enum dshotCommand
+    {
+        DSHOT_CMD_MOTOR_STOP = 0,
+        DSHOT_CMD_BEEP1 = 1,
+        DSHOT_CMD_BEEP2 = 2,
+        DSHOT_CMD_BEEP3 = 3,
+        DSHOT_CMD_BEEP4 = 4,
+        DSHOT_CMD_BEEP5 = 5,
+        DSHOT_CMD_ESC_INFO = 6,
+        DSHOT_CMD_SPIN_DIRECTION_1 = 7,
+        DSHOT_CMD_SPIN_DIRECTION_2 = 8,
+        DSHOT_CMD_3D_MODE_OFF = 9,
+        DSHOT_CMD_3D_MODE_ON = 10,
+        DSHOT_CMD_SETTINGS_REQUEST = 11,
+        DSHOT_CMD_SAVE_SETTINGS = 12,
+        DSHOT_CMD_SPIN_DIRECTION_NORMAL = 20,
+        DSHOT_CMD_SPIN_DIRECTION_REVERSED = 21,
+        DSHOT_CMD_LED0_ON = 22,
+        DSHOT_CMD_LED1_ON = 23,
+        DSHOT_CMD_LED2_ON = 24,
+        DSHOT_CMD_LED3_ON = 25,
+        DSHOT_CMD_LED0_OFF = 26,
+        DSHOT_CMD_LED1_OFF = 27,
+        DSHOT_CMD_LED2_OFF = 28,
+        DSHOT_CMD_LED3_OFF = 29,
+        DSHOT_CMD_AUDIO_STREAM_MODE = 30,
+        DSHOT_CMD_SILENT_MODE = 31,
+        DSHOT_CMD_SIGNAL_LINE_TELEMETRY_DISABLE = 32,
+        DSHOT_CMD_SIGNAL_LINE_CONTINUOUS_ERPM = 33
+    };
+
     struct telemData
     {
-        uint16_t throttle;
+        float throttle;      // Throttle percentage (0-100% or -100 to +100%)
         uint32_t rpm;
         uint32_t temp;
         float voltage;
@@ -45,16 +83,28 @@ public:
     /// @param signal_pin The pin used for ESC signal output
     ESC(int signal_pin);
 
-    /// @brief Set the throttle value for the ESC
-    /// @param microseconds The throttle value in microseconds
-    void setThrottle(int microseconds);
+    /// @brief Set the throttle value as a percentage
+    /// @param percent Throttle percentage: 0-100% for unidirectional, -100 to +100% for bidirectional
+    void setThrottle(float percent);
+
+    /// @brief Stop the ESC (mode and type dependent)
+    void stop();
+
+    /// @brief Send a special DSHOT command (only works in DSHOT mode)
+    /// @param command The DSHOT command to send (use dshotCommand enum)
+    /// @param repeat_count Number of times to send the command (default 1, some commands need 10+)
+    void sendDshotCommand(dshotCommand command, uint8_t repeat_count = 1);
 
     /// @brief Getter method for the internally stored telemetry data
     telemData getTelemetry(); // Returns the telemetry data struct
 
     void setMode(escMode mode); // Sets the ESC communication mode (DSHOT or PWM)
+    void setEscType(escType type); // Sets the ESC type (unidirectional or bidirectional)
     void setMotorPoles(uint8_t poles); // Sets the number of motor poles for telemetry calculations
     void setDshotSpeed(dshotSpeed speed); // Sets the DSHOT speed (only applicable in DSHOT mode)
+    void setThrottleRange(uint16_t min, uint16_t max); // Sets the throttle range (min/max microseconds)
+    void setRampRates(uint16_t up_rate, uint16_t down_rate, bool enabled); // Sets ramp up/down rates (μs/second) and enable state
+    void updateRamp(); // Updates ramp state - must be called regularly in main loop
 
 
 private:
@@ -63,8 +113,19 @@ private:
 
     // Configuration variables
     escMode _mode;
+    escType _esc_type;
     uint8_t _motor_poles;
     dshotSpeed _dshot_speed;
+    uint16_t _throttle_min;
+    uint16_t _throttle_max;
+
+    // Ramp/slew rate limiting
+    uint16_t _ramp_up_rate;    // μs per second
+    uint16_t _ramp_down_rate;  // μs per second
+    bool _ramp_enabled;
+    float _commanded_throttle; // Target throttle percentage from user
+    float _actual_throttle;    // Current throttle percentage being sent to ESC
+    unsigned long _last_ramp_update; // Timestamp for ramp calculations
 
     telemData _telemetry; // Telemetry struct
 
@@ -72,6 +133,10 @@ private:
     BidirDShotX1* _dshot; // DSHOT communication object (dynamically allocated)
     Servo _pwm; // Servo object for PWM control
 
+    // Internal conversion methods
+    uint16_t percentToPwmMicroseconds(float percent); // Convert percentage to PWM microseconds
+    uint16_t percentToDshotValue(float percent);      // Convert percentage to DSHOT value (48-2047)
+    void sendThrottleInternal();                      // Actually send throttle to hardware
 
     void updateTelemetry(); // Reads telemetry data from the ESC and stores it internally
 
