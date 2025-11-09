@@ -17,17 +17,18 @@
 
 /// @brief PWM mode data packet
 /// @details Contains voltage, current, and throttle command
-/// Total size: 12 bytes
+/// Total size: 13 bytes
 struct PWMDataPacket
 {
     float voltage;      // Battery voltage in volts (4 bytes)
     float current;      // Current in amps (4 bytes)
     float throttle;     // Commanded throttle as percentage: 0-100% uni, -100 to +100% bi (4 bytes)
+    uint8_t battery_state; // 0 = NORMAL, 1 = WARNING, 2 = CUTOFF (1 byte)
 };
 
 /// @brief DSHOT mode data packet
 /// @details Contains all PWM data plus ESC telemetry
-/// Total size: 30 bytes
+/// Total size: 31 bytes
 struct DSHOTDataPacket
 {
     // Base PWM data
@@ -42,6 +43,7 @@ struct DSHOTDataPacket
     uint16_t esc_temp;  // ESC temperature in Celsius (2 bytes)
     uint16_t esc_status; // ESC status code (2 bytes)
     uint16_t esc_stress; // ESC stress level (2 bytes)
+    uint8_t battery_state; // 0 = NORMAL, 1 = WARNING, 2 = CUTOFF (1 byte)
 };
 
 /// @brief ESC configuration packet
@@ -85,8 +87,8 @@ struct ESCCommandPacket
 #pragma pack(pop)
 
 // Verify struct sizes at compile time
-static_assert(sizeof(PWMDataPacket) == 12, "PWMDataPacket must be 12 bytes");
-static_assert(sizeof(DSHOTDataPacket) == 30, "DSHOTDataPacket must be 30 bytes");
+static_assert(sizeof(PWMDataPacket) == 13, "PWMDataPacket must be 13 bytes");
+static_assert(sizeof(DSHOTDataPacket) == 31, "DSHOTDataPacket must be 31 bytes");
 static_assert(sizeof(ESCConfigPacket) == 19, "ESCConfigPacket must be 19 bytes");
 static_assert(sizeof(BatteryStatusPacket) == 5, "BatteryStatusPacket must be 5 bytes");
 static_assert(sizeof(ESCCommandPacket) == 5, "ESCCommandPacket must be 5 bytes");

@@ -44,7 +44,8 @@ public:
     /// @param voltage Battery voltage in volts
     /// @param current Current in amps
     /// @param throttle Throttle percentage (0-100% uni, -100 to +100% bi)
-    void sendPWMData(float voltage, float current, float throttle);
+    /// @param battery_state Battery protection state (NORMAL, WARNING, CUTOFF)
+    void sendPWMData(float voltage, float current, float throttle, BatteryState battery_state);
 
     /// @brief Send DSHOT mode data packet
     /// @param voltage Battery voltage in volts
@@ -56,9 +57,11 @@ public:
     /// @param esc_temp ESC temperature in Celsius
     /// @param esc_status ESC status code
     /// @param esc_stress ESC stress level
+    /// @param battery_state Battery protection state (NORMAL, WARNING, CUTOFF)
     void sendDSHOTData(float voltage, float current, float throttle,
                        uint32_t rpm, float esc_voltage, uint32_t esc_current,
-                       uint16_t esc_temp, uint16_t esc_status, uint16_t esc_stress);
+                       uint16_t esc_temp, uint16_t esc_status, uint16_t esc_stress,
+                       BatteryState battery_state);
 
     /// @brief Send battery status update
     /// @param state Battery state (NORMAL, WARNING, CUTOFF)

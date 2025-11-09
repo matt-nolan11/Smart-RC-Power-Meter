@@ -5,7 +5,7 @@
 #include <BLEManager.h>
 
 // Disable serial output for maximum performance
-#define ENABLE_SERIAL_DEBUG 0
+#define ENABLE_SERIAL_DEBUG 1
 
 // Current Sensor (ACS72981KLRATR-150U3) parameters
 constexpr unsigned int CURRENT_SENSOR_PIN = A0;
@@ -54,6 +54,8 @@ uint8_t current_esc_mode = 0;   // 0 = PWM, 1 = DSHOT
 BLEManager::BatteryState battery_state = BLEManager::BatteryState::NORMAL;
 float cutoff_voltage = 12.8f;  // Will be calculated from config
 float warning_voltage = 13.6f; // Will be calculated from config
+bool battery_state_sent = false; // Track if initial state has been sent
+unsigned long last_battery_status_send = 0;  // Rate limit battery status updates
 
 // Timing variables
 unsigned long last_serial_update = 0;
@@ -119,6 +121,9 @@ void loop()
     // Calculate battery protection thresholds
     cutoff_voltage = config.battery_cells * (config.battery_cutoff_mv / 1000.0f);
     warning_voltage = config.battery_cells * ((config.battery_cutoff_mv + config.battery_warning_delta_mv) / 1000.0f);
+    
+    // Reset battery state sent flag when config changes (especially protection enable/disable)
+    battery_state_sent = false;
 
 #if ENABLE_SERIAL_DEBUG
     Serial.println("Applied new ESC configuration");
@@ -144,6 +149,9 @@ void loop()
 #endif
 
     bleManager.clearConfigFlag();
+    
+    // Note: Initial battery status will be sent on first battery check in main loop
+    // The battery_state_sent flag was reset above when thresholds were recalculated
   }
 
   // Check for new ESC commands
@@ -272,6 +280,28 @@ void loop()
   {
     BLEManager::BatteryState new_state = BLEManager::BatteryState::NORMAL;
 
+#if ENABLE_SERIAL_DEBUG
+    // Periodic debug output every 2 seconds
+    static unsigned long last_battery_debug = 0;
+    if (millis() - last_battery_debug > 2000)
+    {
+      last_battery_debug = millis();
+      Serial.print("Battery: V=");
+      Serial.print(sensor_voltage, 2);
+      Serial.print("V  Cutoff=");
+      Serial.print(cutoff_voltage, 2);
+      Serial.print("V  Warning=");
+      Serial.print(warning_voltage, 2);
+      Serial.print("V  State=");
+      if (battery_state == BLEManager::BatteryState::CUTOFF)
+        Serial.println("CUTOFF");
+      else if (battery_state == BLEManager::BatteryState::WARNING)
+        Serial.println("WARNING");
+      else
+        Serial.println("NORMAL");
+    }
+#endif
+
     if (sensor_voltage < cutoff_voltage)
     {
       new_state = BLEManager::BatteryState::CUTOFF;
@@ -309,23 +339,43 @@ void loop()
       }
     }
 
-    if (new_state != battery_state)
+    // Update state immediately, but rate-limit BLE notifications
+    if (new_state != battery_state || !battery_state_sent)
     {
       battery_state = new_state;
-      // Send immediately on state change
-      bleManager.sendBatteryStatus(battery_state, sensor_voltage);
+      
+      // Send notification if enough time has passed since last send (rate limiting)
+      if (!battery_state_sent || (millis() - last_battery_status_send >= 200))
+      {
+        battery_state_sent = true;
+        last_battery_status_send = millis();
+        bleManager.sendBatteryStatus(battery_state, sensor_voltage);
+#if ENABLE_SERIAL_DEBUG
+        Serial.print("Battery status SENT: ");
+        if (battery_state == BLEManager::BatteryState::CUTOFF)
+          Serial.print("CUTOFF");
+        else if (battery_state == BLEManager::BatteryState::WARNING)
+          Serial.print("WARNING");
+        else
+          Serial.print("NORMAL");
+        Serial.print(" at ");
+        Serial.print(sensor_voltage, 2);
+        Serial.println("V");
+#endif
+      }
     }
   }
   else
   {
     // Battery protection disabled - always report normal
-    if (battery_state != BLEManager::BatteryState::NORMAL)
+    if (battery_state != BLEManager::BatteryState::NORMAL || !battery_state_sent)
     {
       battery_state = BLEManager::BatteryState::NORMAL;
-      // Send immediately on state change
+      battery_state_sent = true;
+      // Send immediately on state change or initial state
       bleManager.sendBatteryStatus(battery_state, sensor_voltage);
 #if ENABLE_SERIAL_DEBUG
-      Serial.println("Battery protection: Disabled");
+      Serial.println("Battery protection: Disabled - status set to NORMAL");
 #endif
     }
   }
@@ -338,7 +388,7 @@ void loop()
     
     if (current_esc_mode == 0) // PWM mode
     {
-      bleManager.sendPWMData(sensor_voltage, sensor_current, actual_throttle);
+      bleManager.sendPWMData(sensor_voltage, sensor_current, actual_throttle, battery_state);
     }
     else // DSHOT mode
     {
@@ -352,7 +402,8 @@ void loop()
         telemetry.current,
         telemetry.temp,
         telemetry.lastStatus,
-        telemetry.stress
+        telemetry.stress,
+        battery_state
       );
     }
   }

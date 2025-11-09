@@ -180,7 +180,7 @@ bool BLEManager::isConnected()
     return _connected;
 }
 
-void BLEManager::sendPWMData(float voltage, float current, float throttle)
+void BLEManager::sendPWMData(float voltage, float current, float throttle, BatteryState battery_state)
 {
     if (!isConnected())
     {
@@ -191,24 +191,20 @@ void BLEManager::sendPWMData(float voltage, float current, float throttle)
     packet.voltage = voltage;
     packet.current = current;
     packet.throttle = throttle;
+    packet.battery_state = static_cast<uint8_t>(battery_state);
 
     // Send notification via BTstack att_server
     int result = att_server_notify(_connection_handle, _data_notification_handle, 
                                    (uint8_t*)&packet, sizeof(PWMDataPacket));
     
-    // Log errors (att_server_notify returns 0 on success)
-    if (result != 0) {
-        static uint32_t error_count = 0;
-        if (++error_count % 100 == 0) {  // Log every 100th error to avoid spam
-            Serial.print("BLE: Notification failed, error: ");
-            Serial.println(result);
-        }
-    }
+    // Ignore return value - queue overflow (error 87) is normal during high-speed streaming
+    (void)result;
 }
 
 void BLEManager::sendDSHOTData(float voltage, float current, float throttle,
                                 uint32_t rpm, float esc_voltage, uint32_t esc_current,
-                                uint16_t esc_temp, uint16_t esc_status, uint16_t esc_stress)
+                                uint16_t esc_temp, uint16_t esc_status, uint16_t esc_stress,
+                                BatteryState battery_state)
 {
     if (!isConnected())
     {
@@ -225,19 +221,14 @@ void BLEManager::sendDSHOTData(float voltage, float current, float throttle,
     packet.esc_temp = esc_temp;
     packet.esc_status = esc_status;
     packet.esc_stress = esc_stress;
+    packet.battery_state = static_cast<uint8_t>(battery_state);
 
     // Send notification via BTstack att_server
     int result = att_server_notify(_connection_handle, _data_notification_handle,
                                    (uint8_t*)&packet, sizeof(DSHOTDataPacket));
     
-    // Log errors (att_server_notify returns 0 on success)
-    if (result != 0) {
-        static uint32_t error_count = 0;
-        if (++error_count % 100 == 0) {  // Log every 100th error to avoid spam
-            Serial.print("BLE: DSHOT notification failed, error: ");
-            Serial.println(result);
-        }
-    }
+    // Ignore return value - queue overflow (error 87) is normal during high-speed streaming
+    (void)result;
 }
 
 void BLEManager::sendBatteryStatus(BatteryState state, float voltage)
@@ -252,8 +243,22 @@ void BLEManager::sendBatteryStatus(BatteryState state, float voltage)
     packet.voltage = voltage;
 
     // Send notification via BTstack att_server
-    att_server_notify(_connection_handle, _battery_status_handle,
+    uint8_t result = att_server_notify(_connection_handle, _battery_status_handle,
                      (uint8_t*)&packet, sizeof(BatteryStatusPacket));
+    
+#if ENABLE_SERIAL_DEBUG
+    if (result == 0)
+    {
+        Serial.println("  -> Battery notification SENT successfully");
+    }
+    else
+    {
+        Serial.print("  -> Battery notification FAILED, error: ");
+        Serial.println(result);
+    }
+#else
+    (void)result;
+#endif
 }
 
 void BLEManager::onConnectionStatusChanged(uint16_t conn_handle, uint8_t status)
