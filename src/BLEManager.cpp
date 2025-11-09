@@ -10,9 +10,11 @@
 #include <BLEManager.h>
 #include <BTstackLib.h>
 
-// Include BTstack att_server for notifications
+// Include BTstack att_server for notifications and gap for connection parameters
 extern "C" {
 #include "ble/att_server.h"
+#include "bluetooth.h"
+#include "gap.h"
 }
 
 // Custom UUIDs for the RC Power Meter service
@@ -22,6 +24,8 @@ extern "C" {
 #define BATTERY_STATUS_CHAR_UUID        "12345678-1234-5678-1234-56789abcdef2"
 #define CONFIG_WRITE_CHAR_UUID          "12345678-1234-5678-1234-56789abcdef3"
 #define COMMAND_WRITE_CHAR_UUID         "12345678-1234-5678-1234-56789abcdef4"
+#define DSHOT_COMMAND_CHAR_UUID         "12345678-1234-5678-1234-56789abcdef5"
+#define DSHOT_RESPONSE_CHAR_UUID        "12345678-1234-5678-1234-56789abcdef6"
 
 // Static instance pointer for callbacks
 BLEManager* BLEManager::_instance = nullptr;
@@ -31,6 +35,8 @@ BLEManager* BLEManager::_instance = nullptr;
 #define BATTERY_STATUS_CHAR_ID          2
 #define CONFIG_WRITE_CHAR_ID            3
 #define COMMAND_WRITE_CHAR_ID           4
+#define DSHOT_COMMAND_CHAR_ID           5
+#define DSHOT_RESPONSE_CHAR_ID          6
 
 // Forward declarations for BTstack callbacks
 static void deviceConnectedCallback(BLEStatus status, BLEDevice *device);
@@ -44,11 +50,15 @@ BLEManager::BLEManager(const char* device_name)
       _ble_initialized(false),
       _new_config_available(false),
       _new_command_available(false),
+      _dshot_command(0),
+      _new_dshot_command_available(false),
       _connection_handle(0),
       _data_notification_handle(0),
       _battery_status_handle(0),
       _config_write_handle(0),
-      _command_write_handle(0)
+      _command_write_handle(0),
+      _dshot_command_write_handle(0),
+      _dshot_response_handle(0)
 {
     _instance = this;
 
@@ -59,7 +69,8 @@ BLEManager::BLEManager(const char* device_name)
     _esc_config.throttle_max = 2000;
     _esc_config.ramp_up_rate = 500;
     _esc_config.ramp_down_rate = 1000;
-    _esc_config.ramp_enabled = 1;
+    _esc_config.ramp_up_enabled = 1;
+    _esc_config.ramp_down_enabled = 1;
     _esc_config.battery_cells = 4;
     _esc_config.battery_cutoff_mv = 3200; // 3.2V per cell
     _esc_config.battery_warning_delta_mv = 200; // 0.2V delta
@@ -116,8 +127,29 @@ bool BLEManager::begin()
         COMMAND_WRITE_CHAR_ID
     );
 
-    // Initialize BTstack and start advertising
+    // DSHOT command characteristic (DSHOT special commands from web app)
+    // Write property only
+    _dshot_command_write_handle = BTstack.addGATTCharacteristicDynamic(
+        new UUID(DSHOT_COMMAND_CHAR_UUID),
+        ATT_PROPERTY_WRITE,
+        DSHOT_COMMAND_CHAR_ID
+    );
+
+    // DSHOT response characteristic (responses to web app)
+    // Read + Notify properties
+    _dshot_response_handle = BTstack.addGATTCharacteristicDynamic(
+        new UUID(DSHOT_RESPONSE_CHAR_UUID),
+        ATT_PROPERTY_READ | ATT_PROPERTY_NOTIFY,
+        DSHOT_RESPONSE_CHAR_ID
+    );
+
+    // Initialize BTstack
     BTstack.setup(_device_name);
+    
+    // BTstack should automatically advertise the GATT service UUIDs
+    // If Web Bluetooth can't discover the device, it may be because
+    // BTstack doesn't include service UUIDs in advertisement by default
+    
     BTstack.startAdvertising();
 
     _ble_initialized = true;
@@ -126,6 +158,7 @@ bool BLEManager::begin()
     Serial.println(_device_name);
     Serial.print("BLE: Service UUID: ");
     Serial.println(SERVICE_UUID);
+    Serial.println("BLE: Started advertising");
 
     return true;
 }
@@ -160,8 +193,17 @@ void BLEManager::sendPWMData(float voltage, float current, float throttle)
     packet.throttle = throttle;
 
     // Send notification via BTstack att_server
-    att_server_notify(_connection_handle, _data_notification_handle, 
-                     (uint8_t*)&packet, sizeof(PWMDataPacket));
+    int result = att_server_notify(_connection_handle, _data_notification_handle, 
+                                   (uint8_t*)&packet, sizeof(PWMDataPacket));
+    
+    // Log errors (att_server_notify returns 0 on success)
+    if (result != 0) {
+        static uint32_t error_count = 0;
+        if (++error_count % 100 == 0) {  // Log every 100th error to avoid spam
+            Serial.print("BLE: Notification failed, error: ");
+            Serial.println(result);
+        }
+    }
 }
 
 void BLEManager::sendDSHOTData(float voltage, float current, float throttle,
@@ -185,8 +227,17 @@ void BLEManager::sendDSHOTData(float voltage, float current, float throttle,
     packet.esc_stress = esc_stress;
 
     // Send notification via BTstack att_server
-    att_server_notify(_connection_handle, _data_notification_handle,
-                     (uint8_t*)&packet, sizeof(DSHOTDataPacket));
+    int result = att_server_notify(_connection_handle, _data_notification_handle,
+                                   (uint8_t*)&packet, sizeof(DSHOTDataPacket));
+    
+    // Log errors (att_server_notify returns 0 on success)
+    if (result != 0) {
+        static uint32_t error_count = 0;
+        if (++error_count % 100 == 0) {  // Log every 100th error to avoid spam
+            Serial.print("BLE: DSHOT notification failed, error: ");
+            Serial.println(result);
+        }
+    }
 }
 
 void BLEManager::sendBatteryStatus(BatteryState state, float voltage)
@@ -209,6 +260,26 @@ void BLEManager::onConnectionStatusChanged(uint16_t conn_handle, uint8_t status)
 {
     _connection_handle = conn_handle;
     _connected = (status == 0);
+    
+    // Request low-latency connection parameters for high-throughput data streaming
+    if (_connected) {
+        // Connection interval: 7.5ms min, 15ms max (6-12 units, 1 unit = 1.25ms)
+        // Slave latency: 0 (process every connection event)
+        // Supervision timeout: 4000ms (400 units, 1 unit = 10ms)
+        uint16_t conn_interval_min = 6;   // 7.5ms
+        uint16_t conn_interval_max = 12;  // 15ms
+        uint16_t slave_latency = 0;
+        uint16_t supervision_timeout = 400; // 4000ms
+        
+        gap_request_connection_parameter_update(conn_handle, 
+                                               conn_interval_min, 
+                                               conn_interval_max,
+                                               slave_latency, 
+                                               supervision_timeout);
+        
+        Serial.println("BLE: Requested low-latency connection parameters");
+        Serial.print("  Interval: 7.5-15ms, Latency: 0, Timeout: 4000ms");
+    }
 }
 
 void BLEManager::onConfigWrite(uint16_t conn_handle, uint8_t* data, uint16_t len)
@@ -237,12 +308,57 @@ void BLEManager::onCommandWrite(uint16_t conn_handle, uint8_t* data, uint16_t le
         memcpy(&_esc_command, data, sizeof(ESCCommandPacket));
         _new_command_available = true;
 
-        Serial.println("BLE: Received ESC command");
-        Serial.print("  Command: ");
-        Serial.println(_esc_command.command == 0 ? "STOP" : "START");
-        Serial.print("  Throttle: ");
-        Serial.println(_esc_command.throttle);
+        #if ENABLE_SERIAL_DEBUG
+            Serial.println("BLE: Received ESC command");
+            Serial.print("  Command: ");
+            Serial.println(_esc_command.command == 0 ? "STOP" : "START");
+            Serial.print("  Throttle: ");
+            Serial.println(_esc_command.throttle);
+        #endif
     }
+}
+
+void BLEManager::onDSHOTCommandWrite(uint16_t conn_handle, uint8_t* data, uint16_t len)
+{
+    if (len == 1)
+    {
+        _dshot_command = data[0];
+        _new_dshot_command_available = true;
+
+        #if ENABLE_SERIAL_DEBUG
+            Serial.println("BLE: Received DSHOT command");
+            Serial.print("  Command: ");
+            Serial.println(_dshot_command);
+        #endif
+    }
+}
+
+void BLEManager::sendDSHOTResponse(uint8_t type, uint8_t* data, uint16_t length)
+{
+    if (!isConnected())
+    {
+        return;
+    }
+
+    // Create response packet: [type, data...]
+    uint8_t response[32]; // Max packet size
+    response[0] = type;
+    
+    uint16_t total_length = 1;
+    if (data && length > 0 && length < 31)
+    {
+        memcpy(response + 1, data, length);
+        total_length += length;
+    }
+
+    // Send notification via BTstack att_server
+    att_server_notify(_connection_handle, _dshot_response_handle,
+                     response, total_length);
+
+    #if ENABLE_SERIAL_DEBUG
+        Serial.print("BLE: DSHOT response sent, type: ");
+        Serial.println(type);
+    #endif
 }
 
 // BTstack callback implementations
@@ -305,25 +421,42 @@ static uint16_t gattReadCallback(uint16_t characteristic_id, uint8_t *buffer, ui
     }
 }
 
-static int gattWriteCallback(uint16_t characteristic_id, uint8_t *buffer, uint16_t size)
+static int gattWriteCallback(uint16_t characteristic_handle, uint8_t *buffer, uint16_t size)
 {
+    Serial.print("BLE: Write callback called - Handle: ");
+    Serial.print(characteristic_handle);
+    Serial.print(", size: ");
+    Serial.println(size);
+    
     if (!BLEManager::_instance || !buffer)
     {
+        Serial.println("BLE: Write callback - instance or buffer is null!");
         return 1; // Error
     }
 
-    // Handle writes for different characteristics
-    switch (characteristic_id)
+    // Compare against handles, not IDs
+    if (characteristic_handle == BLEManager::_instance->getConfigWriteHandle())
     {
-        case CONFIG_WRITE_CHAR_ID:
-            BLEManager::_instance->onConfigWrite(0, buffer, size);
-            return 0; // Success
-            
-        case COMMAND_WRITE_CHAR_ID:
-            BLEManager::_instance->onCommandWrite(0, buffer, size);
-            return 0; // Success
-            
-        default:
-            return 1; // Error - characteristic not writable
+        Serial.println("BLE: Routing to onConfigWrite");
+        BLEManager::_instance->onConfigWrite(0, buffer, size);
+        return 0; // Success
+    }
+    else if (characteristic_handle == BLEManager::_instance->getCommandWriteHandle())
+    {
+        Serial.println("BLE: Routing to onCommandWrite");
+        BLEManager::_instance->onCommandWrite(0, buffer, size);
+        return 0; // Success
+    }
+    else if (characteristic_handle == BLEManager::_instance->getDSHOTCommandWriteHandle())
+    {
+        Serial.println("BLE: Routing to onDSHOTCommandWrite");
+        BLEManager::_instance->onDSHOTCommandWrite(0, buffer, size);
+        return 0; // Success
+    }
+    else
+    {
+        Serial.print("BLE: Unknown characteristic handle: ");
+        Serial.println(characteristic_handle);
+        return 1; // Error - characteristic not writable
     }
 }

@@ -87,10 +87,40 @@ public:
     /// @brief Clear the new command flag after processing
     void clearCommandFlag() { _new_command_available = false; }
 
+    /// @brief Send DSHOT special command response
+    /// @param type Response type (0=ack, 1=info, 2=settings)
+    /// @param data Optional data bytes
+    /// @param length Length of data
+    void sendDSHOTResponse(uint8_t type, uint8_t* data, uint16_t length);
+
+    /// @brief Get the current DSHOT special command
+    /// @return The DSHOT command value (0-47)
+    uint8_t getDSHOTCommand() const { return _dshot_command; }
+
+    /// @brief Check if new DSHOT command has been received
+    /// @return true if new DSHOT command available
+    bool hasNewDSHOTCommand() const { return _new_dshot_command_available; }
+
+    /// @brief Clear the new DSHOT command flag after processing
+    void clearDSHOTCommandFlag() { _new_dshot_command_available = false; }
+
+    /// @brief Get the config write characteristic handle
+    /// @return The handle for the config write characteristic
+    uint16_t getConfigWriteHandle() const { return _config_write_handle; }
+
+    /// @brief Get the command write characteristic handle
+    /// @return The handle for the command write characteristic
+    uint16_t getCommandWriteHandle() const { return _command_write_handle; }
+
+    /// @brief Get the DSHOT command write characteristic handle
+    /// @return The handle for the DSHOT command write characteristic
+    uint16_t getDSHOTCommandWriteHandle() const { return _dshot_command_write_handle; }
+
     // Internal methods for BLE callbacks (public for callback access)
     void onConnectionStatusChanged(uint16_t conn_handle, uint8_t status);
     void onConfigWrite(uint16_t conn_handle, uint8_t* data, uint16_t len);
     void onCommandWrite(uint16_t conn_handle, uint8_t* data, uint16_t len);
+    void onDSHOTCommandWrite(uint16_t conn_handle, uint8_t* data, uint16_t len);
 
     // Singleton instance for callbacks (needs public access for callbacks)
     static BLEManager* _instance;
@@ -106,6 +136,10 @@ private:
     bool _new_config_available;
     bool _new_command_available;
 
+    // DSHOT special command
+    uint8_t _dshot_command;
+    bool _new_dshot_command_available;
+
     // BLE connection handle
     uint16_t _connection_handle;
 
@@ -114,4 +148,6 @@ private:
     uint16_t _battery_status_handle;
     uint16_t _config_write_handle;
     uint16_t _command_write_handle;
+    uint16_t _dshot_command_write_handle;
+    uint16_t _dshot_response_handle;
 };

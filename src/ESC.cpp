@@ -10,7 +10,8 @@ ESC::ESC(int signal_pin) : _signal_pin(signal_pin),
                            _throttle_max(2000),
                            _ramp_up_rate(500),
                            _ramp_down_rate(1000),
-                           _ramp_enabled(true),
+                           _ramp_up_enabled(true),
+                           _ramp_down_enabled(true),
                            _commanded_throttle(0.0f),
                            _actual_throttle(0.0f),
                            _last_ramp_update(0)
@@ -38,13 +39,13 @@ void ESC::setThrottle(float percent)
     // Store commanded throttle for ramp limiting
     _commanded_throttle = percent;
     
-    // If ramp is disabled, apply immediately
-    if (!_ramp_enabled)
+    // If both ramps are disabled, apply immediately
+    if (!_ramp_up_enabled && !_ramp_down_enabled)
     {
         _actual_throttle = percent;
         sendThrottleInternal();
     }
-    // If ramp is enabled, updateRamp() will gradually change _actual_throttle
+    // If any ramp is enabled, updateRamp() will gradually change _actual_throttle
 
     _telemetry.throttle = _actual_throttle;
 }
@@ -53,8 +54,11 @@ uint16_t ESC::percentToPwmMicroseconds(float percent)
 {
     if (_esc_type == escType::UNIDIRECTIONAL)
     {
-        // Unidirectional: 0-100% maps to throttle_min to throttle_max
-        // 0% = minimum throttle (stop), 100% = maximum throttle
+        // Unidirectional: 0-0.5% = minimum (stop/deadband), 0.5-100% maps to throttle_min to throttle_max
+        if (percent <= 0.5f)
+        {
+            return _throttle_min; // Deadband - always send minimum
+        }
         uint16_t range = _throttle_max - _throttle_min;
         return _throttle_min + (uint16_t)((percent / 100.0f) * range);
     }
@@ -89,16 +93,16 @@ uint16_t ESC::percentToDshotValue(float percent)
 {
     if (_esc_type == escType::UNIDIRECTIONAL)
     {
-        // Unidirectional DSHOT: 0% = stop command (0), 0.1-100% maps to 48-2047
+        // Unidirectional DSHOT: 0-0.5% = stop command (0), 0.5-100% maps to 48-2047
         // Values 0-47 are reserved for special commands
         // 0 = motor stop, 1-47 = other special commands
         constexpr uint16_t DSHOT_MIN_THROTTLE = 48;
         constexpr uint16_t DSHOT_MAX_THROTTLE = 2047;
         constexpr uint16_t DSHOT_THROTTLE_RANGE = DSHOT_MAX_THROTTLE - DSHOT_MIN_THROTTLE;
         
-        if (percent <= 0.0f)
+        if (percent <= 0.5f)
         {
-            // 0% = stop command
+            // 0-0.5% = stop command (deadband)
             return 0;
         }
         else if (percent >= 100.0f)
@@ -107,7 +111,7 @@ uint16_t ESC::percentToDshotValue(float percent)
         }
         else
         {
-            // Map 0.1-100% to 48-2047 (skip command range)
+            // Map 0.5-100% to 48-2047 (skip command range)
             return DSHOT_MIN_THROTTLE + (uint16_t)((percent / 100.0f) * DSHOT_THROTTLE_RANGE);
         }
     }
@@ -242,23 +246,45 @@ void ESC::setThrottleRange(uint16_t min, uint16_t max)
     _throttle_max = max;
 }
 
-void ESC::setRampRates(uint16_t up_rate, uint16_t down_rate, bool enabled)
+void ESC::setRampRates(uint16_t up_rate, uint16_t down_rate, bool up_enabled, bool down_enabled)
 {
     _ramp_up_rate = up_rate;
     _ramp_down_rate = down_rate;
-    _ramp_enabled = enabled;
+    _ramp_up_enabled = up_enabled;
+    _ramp_down_enabled = down_enabled;
     
     // Initialize ramp timing
     _last_ramp_update = millis();
 }
 
+void ESC::resetThrottle()
+{
+    // Reset actual throttle to 0% without changing commanded throttle
+    // This ensures ramping starts from a stopped state
+    _actual_throttle = 0.0f;
+    _last_ramp_update = millis();
+    
+    // Send stop command to ESC
+    if (_mode == escMode::DSHOT && _dshot != nullptr)
+    {
+        _dshot->sendThrottle(0);
+    }
+    else if (_mode == escMode::PWM)
+    {
+        if (_esc_type == escType::UNIDIRECTIONAL)
+        {
+            _pwm.writeMicroseconds(_throttle_min);
+        }
+        else // BIDIRECTIONAL
+        {
+            uint16_t center = (_throttle_min + _throttle_max) / 2;
+            _pwm.writeMicroseconds(center);
+        }
+    }
+}
+
 void ESC::updateRamp()
 {
-    if (!_ramp_enabled)
-    {
-        return;
-    }
-    
     unsigned long current_time = millis();
     unsigned long delta_time = current_time - _last_ramp_update;
     
@@ -270,26 +296,43 @@ void ESC::updateRamp()
     
     _last_ramp_update = current_time;
     
+    // Check if we're already at target
+    if (_commanded_throttle == _actual_throttle)
+    {
+        return;
+    }
+    
     // Calculate maximum percentage change allowed based on time elapsed
-    // Rate is in μs/second, but we need to convert to %/second
-    // For simplicity, assume 1000μs range = 100%, so rate_μs/s ≈ rate_%/s * 10
-    // This gives us approximate percentage ramp rates
+    // Rate is now in %/second directly (changed from μs/s)
     float max_percent_change;
     
     if (_commanded_throttle > _actual_throttle)
     {
         // Ramping up
-        max_percent_change = (_ramp_up_rate / 10.0f / 1000.0f) * delta_time;
+        if (_ramp_up_enabled)
+        {
+            max_percent_change = (_ramp_up_rate / 1000.0f) * delta_time;
+        }
+        else
+        {
+            // Instant jump if ramp up disabled
+            _actual_throttle = _commanded_throttle;
+            return;
+        }
     }
-    else if (_commanded_throttle < _actual_throttle)
+    else // _commanded_throttle < _actual_throttle
     {
         // Ramping down
-        max_percent_change = (_ramp_down_rate / 10.0f / 1000.0f) * delta_time;
-    }
-    else
-    {
-        // Already at target
-        return;
+        if (_ramp_down_enabled)
+        {
+            max_percent_change = (_ramp_down_rate / 1000.0f) * delta_time;
+        }
+        else
+        {
+            // Instant jump if ramp down disabled
+            _actual_throttle = _commanded_throttle;
+            return;
+        }
     }
     
     // Calculate new actual throttle percentage
@@ -351,6 +394,11 @@ void ESC::stop()
 ESC::telemData ESC::getTelemetry()
 {
     return _telemetry;
+}
+
+float ESC::getActualThrottle() const
+{
+    return _actual_throttle;
 }
 
 void ESC::updateTelemetry()

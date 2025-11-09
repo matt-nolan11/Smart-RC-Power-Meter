@@ -85,7 +85,7 @@
 - **Configuration:**
   - Cell count: Dropdown or numeric input (1S-12S, default: 4S)
   - Low-voltage cutoff per cell: Numeric input (default: 3.2V/cell)
-  - UI note: "⚠️ Recommended: Keep above 3.0V to preserve battery health"
+  - UI note: "⚠️ Recommended: Keep above 3.2V to preserve battery health"
   - Warning delta: Numeric input (default: 0.2V per cell)
   - Total cutoff voltage = cells × cutoff_per_cell (e.g., 4S × 3.2V = 12.8V)
   - Total warning voltage = cells × (cutoff_per_cell + warning_delta) (e.g., 4S × 3.4V = 13.6V)
@@ -377,7 +377,7 @@ Note: Spaces in device name replaced with dashes
 - Plot configurations (add/remove, Y-axis assignments)
 - Data card selections (add/remove, metric selection)
 - Tip speed display units (mph, m/s, etc.)
-- Propeller diameter (for calculation)
+- Diameter (for calculation)
 - MOI (for calculation)
 - CSV export selections
 
@@ -548,7 +548,7 @@ Note: Spaces in device name replaced with dashes
 - [ ] Pico W: Integrate existing `ESC::getTelemetry()`
 - [ ] Web App: Display telemetry data (conditional on mode)
 - [ ] Web App: DSHOT configuration UI
-  - Propeller diameter input with unit selector
+  - Diameter input with unit selector
   - MOI input with unit selector
   - Tip speed unit selector
 - [ ] Web App: Calculate tip speed from RPM + diameter

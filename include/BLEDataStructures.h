@@ -46,7 +46,7 @@ struct DSHOTDataPacket
 
 /// @brief ESC configuration packet
 /// @details Settings sent from web app to device
-/// Total size: 18 bytes
+/// Total size: 19 bytes
 struct ESCConfigPacket
 {
     uint8_t mode;           // 0 = PWM, 1 = DSHOT (1 byte)
@@ -55,7 +55,8 @@ struct ESCConfigPacket
     uint16_t throttle_max;  // Maximum throttle in microseconds (2 bytes)
     uint16_t ramp_up_rate;  // Ramp up rate in μs/second (2 bytes)
     uint16_t ramp_down_rate; // Ramp down rate in μs/second (2 bytes)
-    uint8_t ramp_enabled;   // 0 = disabled, 1 = enabled (1 byte)
+    uint8_t ramp_up_enabled;   // 0 = disabled, 1 = enabled (1 byte)
+    uint8_t ramp_down_enabled; // 0 = disabled, 1 = enabled (1 byte)
     uint8_t battery_cells;  // Number of battery cells (1S-12S) (1 byte)
     uint16_t battery_cutoff_mv; // Cutoff voltage per cell in millivolts (2 bytes)
     uint16_t battery_warning_delta_mv; // Warning delta per cell in millivolts (2 bytes)
@@ -86,6 +87,6 @@ struct ESCCommandPacket
 // Verify struct sizes at compile time
 static_assert(sizeof(PWMDataPacket) == 12, "PWMDataPacket must be 12 bytes");
 static_assert(sizeof(DSHOTDataPacket) == 30, "DSHOTDataPacket must be 30 bytes");
-static_assert(sizeof(ESCConfigPacket) == 18, "ESCConfigPacket must be 18 bytes");
+static_assert(sizeof(ESCConfigPacket) == 19, "ESCConfigPacket must be 19 bytes");
 static_assert(sizeof(BatteryStatusPacket) == 5, "BatteryStatusPacket must be 5 bytes");
 static_assert(sizeof(ESCCommandPacket) == 5, "ESCCommandPacket must be 5 bytes");

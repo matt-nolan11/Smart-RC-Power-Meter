@@ -98,13 +98,18 @@ public:
     /// @brief Getter method for the internally stored telemetry data
     telemData getTelemetry(); // Returns the telemetry data struct
 
+    /// @brief Get the current actual throttle percentage (after ramping)
+    /// @return Current throttle percentage (0-100% or -100 to +100%)
+    float getActualThrottle() const;
+
     void setMode(escMode mode); // Sets the ESC communication mode (DSHOT or PWM)
     void setEscType(escType type); // Sets the ESC type (unidirectional or bidirectional)
     void setMotorPoles(uint8_t poles); // Sets the number of motor poles for telemetry calculations
     void setDshotSpeed(dshotSpeed speed); // Sets the DSHOT speed (only applicable in DSHOT mode)
     void setThrottleRange(uint16_t min, uint16_t max); // Sets the throttle range (min/max microseconds)
-    void setRampRates(uint16_t up_rate, uint16_t down_rate, bool enabled); // Sets ramp up/down rates (μs/second) and enable state
+    void setRampRates(uint16_t up_rate, uint16_t down_rate, bool up_enabled, bool down_enabled); // Sets ramp up/down rates (%/second) and enable states
     void updateRamp(); // Updates ramp state - must be called regularly in main loop
+    void resetThrottle(); // Resets actual throttle to 0 (for ramping from stopped state)
 
 
 private:
@@ -120,9 +125,10 @@ private:
     uint16_t _throttle_max;
 
     // Ramp/slew rate limiting
-    uint16_t _ramp_up_rate;    // μs per second
-    uint16_t _ramp_down_rate;  // μs per second
-    bool _ramp_enabled;
+    uint16_t _ramp_up_rate;    // % per second
+    uint16_t _ramp_down_rate;  // % per second
+    bool _ramp_up_enabled;
+    bool _ramp_down_enabled;
     float _commanded_throttle; // Target throttle percentage from user
     float _actual_throttle;    // Current throttle percentage being sent to ESC
     unsigned long _last_ramp_update; // Timestamp for ramp calculations
