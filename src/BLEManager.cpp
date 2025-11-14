@@ -266,8 +266,8 @@ void BLEManager::onConnectionStatusChanged(uint16_t conn_handle, uint8_t status)
     _connection_handle = conn_handle;
     _connected = (status == 0);
     
-    // Request low-latency connection parameters for high-throughput data streaming
     if (_connected) {
+        // Connection established - request low-latency parameters
         // Connection interval: 7.5ms min, 15ms max (6-12 units, 1 unit = 1.25ms)
         // Slave latency: 0 (process every connection event)
         // Supervision timeout: 4000ms (400 units, 1 unit = 10ms)
@@ -283,7 +283,14 @@ void BLEManager::onConnectionStatusChanged(uint16_t conn_handle, uint8_t status)
                                                supervision_timeout);
         
         Serial.println("BLE: Requested low-latency connection parameters");
-        Serial.print("  Interval: 7.5-15ms, Latency: 0, Timeout: 4000ms");
+        Serial.println("  Interval: 7.5-15ms, Latency: 0, Timeout: 4000ms");
+    } else {
+        // Disconnection - reset state
+        _connection_handle = 0;
+        _new_config_available = false;
+        _new_command_available = false;
+        _new_dshot_command_available = false;
+        Serial.println("BLE: Connection state reset");
     }
 }
 
@@ -382,6 +389,10 @@ static void deviceDisconnectedCallback(BLEDevice *device)
     {
         Serial.println("BLE: Device disconnected");
         BLEManager::_instance->onConnectionStatusChanged(device->getHandle(), 1);
+        
+        // Restart advertising after disconnect so device is discoverable again
+        Serial.println("BLE: Restarting advertising...");
+        BTstack.startAdvertising();
     }
 }
 

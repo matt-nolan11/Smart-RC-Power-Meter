@@ -90,6 +90,16 @@ public:
     /// @brief Stop the ESC (mode and type dependent)
     void stop();
 
+    /// @brief Connect to ESC - initializes signal output and sends stop command
+    void connect();
+
+    /// @brief Disconnect from ESC - stops all signal output
+    void disconnect();
+
+    /// @brief Check if ESC is connected
+    /// @return True if ESC is connected and outputting signals
+    bool isConnected() const;
+
     /// @brief Send a special DSHOT command (only works in DSHOT mode)
     /// @param command The DSHOT command to send (use dshotCommand enum)
     /// @param repeat_count Number of times to send the command (default 1, some commands need 10+)
@@ -119,6 +129,7 @@ private:
     // Configuration variables
     escMode _mode;
     escType _esc_type;
+    bool _connected;
     uint8_t _motor_poles;
     dshotSpeed _dshot_speed;
     uint16_t _throttle_min;

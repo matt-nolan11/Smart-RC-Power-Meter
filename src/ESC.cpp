@@ -14,14 +14,17 @@ ESC::ESC(int signal_pin) : _signal_pin(signal_pin),
                            _ramp_down_enabled(true),
                            _commanded_throttle(0.0f),
                            _actual_throttle(0.0f),
-                           _last_ramp_update(0)
+                           _last_ramp_update(0),
+                           _connected(false)
 {
-    // Initialize the default mode using setMode
-    setMode(_mode);
+    // Don't initialize signal output - wait for explicit connect() call
 }
 
 void ESC::setThrottle(float percent)
 {
+    // Don't send throttle if not connected
+    if (!_connected) return;
+    
     // Clamp percentage to valid range based on ESC type
     if (_esc_type == escType::UNIDIRECTIONAL)
     {
@@ -188,8 +191,8 @@ void ESC::sendDshotCommand(dshotCommand command, uint8_t repeat_count)
 
 void ESC::setMode(escMode mode)
 {
-    // Teardown old mode (only if different from new mode)
-    if (_mode != mode)
+    // Teardown old mode (only if connected)
+    if (_connected && _mode != mode)
     {
         if (_mode == escMode::PWM)
         {
@@ -207,14 +210,17 @@ void ESC::setMode(escMode mode)
 
     _mode = mode;
 
-    // Setup new mode (only if not already initialized)
-    if (_mode == escMode::PWM && !_pwm.attached())
+    // Setup new mode (only if connected)
+    if (_connected)
     {
-        _pwm.attach(_signal_pin);
-    }
-    else if (_mode == escMode::DSHOT && _dshot == nullptr)
-    {
-        _dshot = new BidirDShotX1(_signal_pin, 600);
+        if (_mode == escMode::PWM && !_pwm.attached())
+        {
+            _pwm.attach(_signal_pin);
+        }
+        else if (_mode == escMode::DSHOT && _dshot == nullptr)
+        {
+            _dshot = new BidirDShotX1(_signal_pin, static_cast<int>(_dshot_speed));
+        }
     }
 }
 
@@ -363,6 +369,9 @@ void ESC::updateRamp()
 
 void ESC::stop()
 {
+    // Don't send signals if not connected
+    if (!_connected) return;
+    
     // Set throttle to 0% (stop)
     _commanded_throttle = 0.0f;
     _actual_throttle = 0.0f;
@@ -389,6 +398,55 @@ void ESC::stop()
     }
 
     _telemetry.throttle = 0;
+}
+
+void ESC::connect()
+{
+    if (_connected) return; // Already connected
+    
+    // Initialize signal output based on current mode
+    if (_mode == escMode::PWM)
+    {
+        _pwm.attach(_signal_pin);
+    }
+    else if (_mode == escMode::DSHOT)
+    {
+        if (_dshot == nullptr)
+        {
+            _dshot = new BidirDShotX1(_signal_pin, static_cast<int>(_dshot_speed));
+        }
+    }
+    
+    _connected = true;
+    
+    // Send stop command to ensure ESC starts in safe state
+    stop();
+}
+
+void ESC::disconnect()
+{
+    if (!_connected) return; // Already disconnected
+    
+    // Send stop command before disconnecting
+    stop();
+    
+    // Cleanup signal output
+    if (_mode == escMode::PWM)
+    {
+        _pwm.detach();
+    }
+    else if (_mode == escMode::DSHOT && _dshot != nullptr)
+    {
+        delete _dshot;
+        _dshot = nullptr;
+    }
+    
+    _connected = false;
+}
+
+bool ESC::isConnected() const
+{
+    return _connected;
 }
 
 ESC::telemData ESC::getTelemetry()

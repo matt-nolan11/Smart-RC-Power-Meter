@@ -80,7 +80,7 @@ struct BatteryStatusPacket
 /// Total size: 5 bytes
 struct ESCCommandPacket
 {
-    uint8_t command;    // 0 = STOP, 1 = START (1 byte)
+    uint8_t command;    // 0 = STOP, 1 = START, 2 = CONNECT, 3 = DISCONNECT (1 byte)
     float throttle;     // Throttle value as percentage: 0-100% uni, -100 to +100% bi (4 bytes)
 };
 

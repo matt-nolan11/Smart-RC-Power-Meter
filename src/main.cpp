@@ -57,6 +57,14 @@ float warning_voltage = 13.6f; // Will be calculated from config
 bool battery_state_sent = false; // Track if initial state has been sent
 unsigned long last_battery_status_send = 0;  // Rate limit battery status updates
 
+// Battery state debouncing (prevent transient dips from triggering state changes)
+constexpr unsigned long BATTERY_STATE_DEBOUNCE_MS = 1000;  // Must stay below threshold for 1000ms
+constexpr float BATTERY_HYSTERESIS_MV = 100.0f;  // 0.1V hysteresis for recovery (in millivolts, will be converted)
+unsigned long battery_below_warning_time = 0;  // Time when voltage first dropped below warning
+unsigned long battery_below_cutoff_time = 0;   // Time when voltage first dropped below cutoff
+bool battery_below_warning = false;
+bool battery_below_cutoff = false;
+
 // Timing variables
 unsigned long last_serial_update = 0;
 
@@ -87,12 +95,13 @@ void setup()
   }
 
   // Set default ESC configuration
+  // Note: ESC will not output any signals until connect() is called
   esc.setMode(ESC::escMode::PWM);
   esc.setEscType(ESC::escType::UNIDIRECTIONAL);
-  esc.stop(); // Ensure ESC is stopped at startup
 
 #if ENABLE_SERIAL_DEBUG
   Serial.println("Initialization complete");
+  Serial.println("ESC: Disconnected - waiting for user to connect");
 #endif
 }
 
@@ -102,6 +111,24 @@ void loop()
 
   // Update BLE stack
   bleManager.update();
+
+  // Handle BLE disconnect - stop ESC for safety
+  static bool was_connected = false;
+  bool is_connected = bleManager.isConnected();
+  if (was_connected && !is_connected)
+  {
+    // Connection lost - disconnect ESC immediately for safety
+    // This stops the motor AND stops all signal output (no signal sent to ESC)
+    if (esc.isConnected())
+    {
+      esc.disconnect();
+      esc_running = false;
+#if ENABLE_SERIAL_DEBUG
+      Serial.println("BLE disconnected - ESC disconnected and stopped for safety");
+#endif
+    }
+  }
+  was_connected = is_connected;
 
   // Check for new ESC configuration
   if (bleManager.hasNewConfig())
@@ -122,8 +149,12 @@ void loop()
     cutoff_voltage = config.battery_cells * (config.battery_cutoff_mv / 1000.0f);
     warning_voltage = config.battery_cells * ((config.battery_cutoff_mv + config.battery_warning_delta_mv) / 1000.0f);
     
-    // Reset battery state sent flag when config changes (especially protection enable/disable)
+    // Reset battery state and debounce timers when config changes
     battery_state_sent = false;
+    battery_below_warning = false;
+    battery_below_cutoff = false;
+    battery_below_warning_time = 0;
+    battery_below_cutoff_time = 0;
 
 #if ENABLE_SERIAL_DEBUG
     Serial.println("Applied new ESC configuration");
@@ -160,8 +191,33 @@ void loop()
     const ESCCommandPacket& command = bleManager.getESCCommand();
     const ESCConfigPacket& config = bleManager.getESCConfig();
 
-    if (command.command == 1) // START or throttle update
+    if (command.command == 2) // CONNECT
     {
+      esc.connect();
+#if ENABLE_SERIAL_DEBUG
+      Serial.println("ESC: Connected");
+#endif
+    }
+    else if (command.command == 3) // DISCONNECT
+    {
+      esc_running = false;
+      esc.disconnect();
+#if ENABLE_SERIAL_DEBUG
+      Serial.println("ESC: Disconnected");
+#endif
+    }
+    else if (command.command == 1) // START or throttle update
+    {
+      // Reject START command if not connected to ESC
+      if (!esc.isConnected())
+      {
+#if ENABLE_SERIAL_DEBUG
+        Serial.println("ESC: Start rejected - ESC not connected");
+#endif
+        bleManager.clearCommandFlag();
+        return;
+      }
+      
       // Reject START command if battery protection is enabled and in cutoff state
       if (!esc_running && config.battery_protection_enabled && battery_state == BLEManager::BatteryState::CUTOFF)
       {
@@ -219,6 +275,16 @@ void loop()
     Serial.println(command);
 #endif
 
+    // Check if ESC is connected
+    if (!esc.isConnected())
+    {
+#if ENABLE_SERIAL_DEBUG
+      Serial.println("DSHOT: Command rejected - ESC not connected");
+#endif
+      bleManager.clearDSHOTCommandFlag();
+      return;
+    }
+
     // Handle different DSHOT command types
     if (command >= 1 && command <= 5) 
     {
@@ -231,13 +297,21 @@ void loop()
     else if (command == 6) 
     {
       // ESC Info request
+      // Send the command to the ESC (requires multiple telemetry frames to respond)
+      esc.sendDshotCommand(ESC::DSHOT_CMD_ESC_INFO, 10);
+      
       // Response format: [firmware_version, rotation_direction, 3d_mode]
+      // Note: Actual info comes via telemetry over time, this is just an acknowledgment
       uint8_t info[3];
-      info[0] = 0;  // Firmware version (not available from telemetry)
-      info[1] = 0;  // Rotation direction (0=normal, 1=reversed) - TODO: track state
-      info[2] = 0;  // 3D mode (0=off, 1=on) - TODO: track state
+      info[0] = 1;  // Firmware version placeholder (actual value comes via telemetry)
+      info[1] = 0;  // Rotation direction (0=normal, 1=reversed)
+      info[2] = 0;  // 3D mode (0=off, 1=on)
       
       bleManager.sendDSHOTResponse(1, info, 3);
+      
+#if ENABLE_SERIAL_DEBUG
+      Serial.println("DSHOT: ESC Info request sent (response may take several seconds)");
+#endif
     }
     else if (command == 7 || command == 8 || command == 20 || command == 21)
     {
@@ -302,40 +376,95 @@ void loop()
     }
 #endif
 
+    // Calculate hysteresis recovery thresholds (add 0.1V to prevent rapid state changes)
+    float hysteresis_v = BATTERY_HYSTERESIS_MV / 1000.0f;
+    float cutoff_recovery = cutoff_voltage + hysteresis_v;
+    float warning_recovery = warning_voltage + hysteresis_v;
+    
+    // Check for voltage drops with debouncing
     if (sensor_voltage < cutoff_voltage)
     {
-      new_state = BLEManager::BatteryState::CUTOFF;
-      if (battery_state != BLEManager::BatteryState::CUTOFF)
+      if (!battery_below_cutoff)
       {
-        // Just entered cutoff state - stop ESC if running
-        if (esc_running)
+        // First time below cutoff - start timer
+        battery_below_cutoff = true;
+        battery_below_cutoff_time = millis();
+      }
+      else if (millis() - battery_below_cutoff_time >= BATTERY_STATE_DEBOUNCE_MS)
+      {
+        // Sustained below cutoff for debounce period - trigger cutoff
+        if (battery_state != BLEManager::BatteryState::CUTOFF)
         {
-          esc.stop();
-          esc_running = false;
+          new_state = BLEManager::BatteryState::CUTOFF;
+          // Stop ESC if running
+          if (esc_running)
+          {
+            esc.stop();
+            esc_running = false;
 #if ENABLE_SERIAL_DEBUG
-          Serial.println("Battery protection: Cutoff reached - ESC stopped");
+            Serial.println("Battery protection: Cutoff reached (debounced) - ESC stopped");
 #endif
+          }
         }
       }
     }
-    else if (sensor_voltage < warning_voltage)
+    else if (sensor_voltage < cutoff_recovery)
     {
-      new_state = BLEManager::BatteryState::WARNING;
-      if (battery_state != BLEManager::BatteryState::WARNING)
+      // Between cutoff and recovery threshold - maintain current state if CUTOFF
+      if (battery_state == BLEManager::BatteryState::CUTOFF)
       {
-#if ENABLE_SERIAL_DEBUG
-        Serial.println("Battery protection: Warning threshold reached");
-#endif
+        new_state = BLEManager::BatteryState::CUTOFF;
       }
+      battery_below_cutoff = false;  // Reset debounce timer
     }
     else
     {
-      // Voltage recovered to normal
-      if (battery_state != BLEManager::BatteryState::NORMAL)
+      // Above cutoff recovery threshold
+      battery_below_cutoff = false;
+    }
+    
+    // Check warning threshold (if not already in cutoff)
+    if (battery_state != BLEManager::BatteryState::CUTOFF && new_state != BLEManager::BatteryState::CUTOFF)
+    {
+      if (sensor_voltage < warning_voltage)
       {
+        if (!battery_below_warning)
+        {
+          // First time below warning - start timer
+          battery_below_warning = true;
+          battery_below_warning_time = millis();
+        }
+        else if (millis() - battery_below_warning_time >= BATTERY_STATE_DEBOUNCE_MS)
+        {
+          // Sustained below warning for debounce period
+          if (battery_state != BLEManager::BatteryState::WARNING)
+          {
+            new_state = BLEManager::BatteryState::WARNING;
 #if ENABLE_SERIAL_DEBUG
-        Serial.println("Battery protection: Voltage recovered to normal");
+            Serial.println("Battery protection: Warning threshold reached (debounced)");
 #endif
+          }
+        }
+      }
+      else if (sensor_voltage < warning_recovery)
+      {
+        // Between warning and recovery threshold - maintain current state if WARNING
+        if (battery_state == BLEManager::BatteryState::WARNING)
+        {
+          new_state = BLEManager::BatteryState::WARNING;
+        }
+        battery_below_warning = false;  // Reset debounce timer
+      }
+      else
+      {
+        // Above warning recovery threshold - normal
+        battery_below_warning = false;
+        if (battery_state != BLEManager::BatteryState::NORMAL)
+        {
+#if ENABLE_SERIAL_DEBUG
+          Serial.println("Battery protection: Voltage recovered to normal");
+#endif
+        }
       }
     }
 
