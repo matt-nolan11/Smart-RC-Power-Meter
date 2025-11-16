@@ -146,6 +146,18 @@ private:
     // BLE connection handle
     uint16_t _connection_handle;
 
+    // Connection watchdog - detect stale connections
+    unsigned long _last_activity_ms;
+    static constexpr unsigned long CONNECTION_TIMEOUT_MS = 30000; // 30 seconds
+    
+    // Connection initialization timeout - detect incomplete connections
+    unsigned long _connection_start_ms;
+    bool _initialization_complete;
+    static constexpr unsigned long INIT_TIMEOUT_MS = 5000; // 5 seconds
+    
+    // Deferred advertising restart flag (set when timeout forces disconnect)
+    bool _restart_advertising_pending;
+
     // GATT attribute handles
     uint16_t _data_notification_handle;
     uint16_t _battery_status_handle;

@@ -21,8 +21,8 @@ constexpr float VOLTAGE_DIVIDER_SCALE = 1.09;
 constexpr float VOLTAGE_DIVIDER_OFFSET = -0.26;
 constexpr unsigned int VOLTAGE_DIVIDER_AVG_WINDOW = 200;
 
-// Serial output rate (10 Hz for debugging)
-constexpr unsigned long SERIAL_UPDATE_INTERVAL_MS = 100;
+// Serial output rate (1 Hz for debugging)
+constexpr unsigned long SERIAL_UPDATE_INTERVAL_MS = 1000;
 
 CurrentSensor inputCurrent(CURRENT_SENSOR_PIN,
                            CURRENT_SENSOR_SCALE,

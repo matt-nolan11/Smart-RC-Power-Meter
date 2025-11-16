@@ -53,6 +53,10 @@ BLEManager::BLEManager(const char* device_name)
       _dshot_command(0),
       _new_dshot_command_available(false),
       _connection_handle(0),
+      _last_activity_ms(0),
+      _connection_start_ms(0),
+      _initialization_complete(false),
+      _restart_advertising_pending(false),
       _data_notification_handle(0),
       _battery_status_handle(0),
       _config_write_handle(0),
@@ -170,9 +174,117 @@ void BLEManager::update()
         return;
     }
 
+    // Handle deferred advertising restart from previous cycle
+    // This must happen BEFORE BTstack.loop() to avoid re-entrancy issues
+    if (_restart_advertising_pending) {
+        _restart_advertising_pending = false;
+        
+        Serial.println("BLE: Executing deferred advertising restart...");
+        
+        // Fully reset BTstack to clear any corrupted state
+        // This is more reliable than just restarting advertising
+        Serial.println("BLE: Shutting down BTstack...");
+        BTstack.stopAdvertising();
+        delay(100);
+        
+        // Reinitialize advertising (BTstack.setup() would reset everything but is too heavy)
+        // Just restart advertising cleanly
+        Serial.println("BLE: Restarting advertising...");
+        BTstack.startAdvertising();
+        Serial.println("BLE: Advertising restarted after BTstack reset");
+    }
+
     // BTstack runs its own event loop
     // Connection status is updated via callbacks
     BTstack.loop();
+    
+    // Connection initialization timeout - detect incomplete connections
+    // If we're "connected" but haven't received the config write within INIT_TIMEOUT_MS,
+    // the connection is incomplete (browser connected but failed during characteristic setup).
+    // This typically happens when browser Web Bluetooth API connects at GATT level but
+    // fails to retrieve services/characteristics, leaving the connection in a broken state.
+    if (_connected && !_initialization_complete && 
+        (millis() - _connection_start_ms > INIT_TIMEOUT_MS)) {
+        Serial.println("BLE: WARNING - Connection initialization timeout (no config within 5s)");
+        Serial.println("BLE: Browser likely failed during characteristic setup");
+        Serial.println("BLE: Forcing disconnect and cleanup");
+        
+        if (_connection_handle != 0) {
+            Serial.print("BLE: Terminating connection handle: ");
+            Serial.println(_connection_handle);
+            
+            // Terminate the connection at the HCI level
+            uint8_t result = gap_disconnect(_connection_handle);
+            Serial.print("BLE: gap_disconnect result: ");
+            Serial.println(result);
+        }
+        
+        // gap_disconnect() doesn't trigger deviceDisconnectedCallback for HCI-initiated disconnects
+        // So we need to manually handle cleanup
+        
+        // Reset all connection state
+        _connected = false;
+        _connection_handle = 0;
+        _initialization_complete = false;
+        _new_config_available = false;
+        _new_command_available = false;
+        _new_dshot_command_available = false;
+        Serial.println("BLE: Connection state cleared");
+        
+        // Wait for disconnect to complete
+        delay(100);
+        
+        // Set flag to restart advertising on next update() cycle
+        // This avoids re-entrancy issues with BTstack.loop()
+        _restart_advertising_pending = true;
+        Serial.println("BLE: Advertising restart scheduled for next cycle");
+        
+        // Exit immediately - advertising restart will happen at start of next update() call
+        return;
+    }
+    
+    // Connection watchdog - detect stale connections
+    // If we're "connected" but haven't received any data for CONNECTION_TIMEOUT_MS,
+    // force a disconnect and restart advertising. This handles cases where:
+    // 1. Web app disconnects without properly closing the connection
+    // 2. Browser caches a stale connection
+    // 3. Connection enters a bad state
+    if (_connected && (millis() - _last_activity_ms > CONNECTION_TIMEOUT_MS)) {
+        Serial.println("BLE: WARNING - Connection timeout detected (no activity for 30s)");
+        Serial.println("BLE: Forcing disconnect and cleanup");
+        
+        if (_connection_handle != 0) {
+            Serial.print("BLE: Terminating connection handle: ");
+            Serial.println(_connection_handle);
+            
+            // Terminate the connection at the HCI level
+            uint8_t result = gap_disconnect(_connection_handle);
+            Serial.print("BLE: gap_disconnect result: ");
+            Serial.println(result);
+        }
+        
+        // gap_disconnect() doesn't trigger deviceDisconnectedCallback for HCI-initiated disconnects
+        // So we need to manually handle cleanup
+        
+        // Reset all connection state
+        _connected = false;
+        _connection_handle = 0;
+        _new_config_available = false;
+        _new_command_available = false;
+        _new_dshot_command_available = false;
+        Serial.println("BLE: Connection state cleared");
+        
+        // Wait for disconnect to complete
+        delay(100);
+        
+        // Set flag to restart advertising on next update() cycle
+        // This avoids re-entrancy issues with BTstack.loop()
+        _restart_advertising_pending = true;
+        Serial.println("BLE: Advertising restart scheduled for next cycle");
+        
+        // Exit immediately - advertising restart will happen at start of next update() call
+        return;
+    }
 }
 
 bool BLEManager::isConnected()
@@ -263,11 +375,24 @@ void BLEManager::sendBatteryStatus(BatteryState state, float voltage)
 
 void BLEManager::onConnectionStatusChanged(uint16_t conn_handle, uint8_t status)
 {
+    Serial.print("BLE: Connection status changed - Handle: ");
+    Serial.print(conn_handle);
+    Serial.print(", Status: ");
+    Serial.println(status);
+    
+    bool was_connected = _connected;
     _connection_handle = conn_handle;
     _connected = (status == 0);
     
     if (_connected) {
-        // Connection established - request low-latency parameters
+        // Connection established - reset activity watchdog
+        _last_activity_ms = millis();
+        
+        // Start initialization timer - expect config write within INIT_TIMEOUT_MS
+        _connection_start_ms = millis();
+        _initialization_complete = false;
+        
+        // Request low-latency parameters
         // Connection interval: 7.5ms min, 15ms max (6-12 units, 1 unit = 1.25ms)
         // Slave latency: 0 (process every connection event)
         // Supervision timeout: 4000ms (400 units, 1 unit = 10ms)
@@ -284,18 +409,34 @@ void BLEManager::onConnectionStatusChanged(uint16_t conn_handle, uint8_t status)
         
         Serial.println("BLE: Requested low-latency connection parameters");
         Serial.println("  Interval: 7.5-15ms, Latency: 0, Timeout: 4000ms");
-    } else {
+    } else if (was_connected) {
+        // Only log disconnect if we were actually connected
         // Disconnection - reset state
+        Serial.println("BLE: Clearing connection state");
         _connection_handle = 0;
         _new_config_available = false;
         _new_command_available = false;
         _new_dshot_command_available = false;
-        Serial.println("BLE: Connection state reset");
+        Serial.println("BLE: Connection state reset complete");
     }
 }
 
 void BLEManager::onConfigWrite(uint16_t conn_handle, uint8_t* data, uint16_t len)
 {
+    if (!isConnected()) {
+        Serial.println("BLE: WARNING - Ignoring config write, not connected");
+        return;
+    }
+    
+    // Update activity timer
+    _last_activity_ms = millis();
+    
+    // Mark initialization as complete (first config received)
+    if (!_initialization_complete) {
+        _initialization_complete = true;
+        Serial.println("BLE: Connection initialization complete (config received)");
+    }
+    
     if (len == sizeof(ESCConfigPacket))
     {
         memcpy(&_esc_config, data, sizeof(ESCConfigPacket));
@@ -315,6 +456,16 @@ void BLEManager::onConfigWrite(uint16_t conn_handle, uint8_t* data, uint16_t len
 
 void BLEManager::onCommandWrite(uint16_t conn_handle, uint8_t* data, uint16_t len)
 {
+    if (!isConnected()) {
+        #if ENABLE_SERIAL_DEBUG
+            Serial.println("BLE: WARNING - Ignoring command write, not connected");
+        #endif
+        return;
+    }
+    
+    // Update activity timer
+    _last_activity_ms = millis();
+    
     if (len == sizeof(ESCCommandPacket))
     {
         memcpy(&_esc_command, data, sizeof(ESCCommandPacket));
@@ -332,6 +483,16 @@ void BLEManager::onCommandWrite(uint16_t conn_handle, uint8_t* data, uint16_t le
 
 void BLEManager::onDSHOTCommandWrite(uint16_t conn_handle, uint8_t* data, uint16_t len)
 {
+    if (!isConnected()) {
+        #if ENABLE_SERIAL_DEBUG
+            Serial.println("BLE: WARNING - Ignoring DSHOT command write, not connected");
+        #endif
+        return;
+    }
+    
+    // Update activity timer
+    _last_activity_ms = millis();
+    
     if (len == 1)
     {
         _dshot_command = data[0];
@@ -385,15 +546,47 @@ static void deviceConnectedCallback(BLEStatus status, BLEDevice *device)
 
 static void deviceDisconnectedCallback(BLEDevice *device)
 {
-    if (BLEManager::_instance && device)
-    {
-        Serial.println("BLE: Device disconnected");
-        BLEManager::_instance->onConnectionStatusChanged(device->getHandle(), 1);
-        
-        // Restart advertising after disconnect so device is discoverable again
-        Serial.println("BLE: Restarting advertising...");
+    if (!BLEManager::_instance) {
+        Serial.println("BLE: ERROR - Instance is null in disconnect callback");
+        // Try to restart advertising anyway
+        BTstack.stopAdvertising();
+        delay(100);
         BTstack.startAdvertising();
+        Serial.println("BLE: Advertising restarted (instance was null)");
+        return;
     }
+    
+    if (!device) {
+        Serial.println("BLE: ERROR - Device is null in disconnect callback");
+        // Try to restart advertising anyway
+        BTstack.stopAdvertising();
+        delay(100);
+        BTstack.startAdvertising();
+        Serial.println("BLE: Advertising restarted (device was null)");
+        return;
+    }
+    
+    Serial.println("BLE: Device disconnected");
+    Serial.print("BLE: Handle: ");
+    Serial.println(device->getHandle());
+    
+    BLEManager::_instance->onConnectionStatusChanged(device->getHandle(), 1);
+    
+    // Small delay to ensure clean disconnect before restarting advertising
+    // This prevents race conditions where the client might try to reconnect
+    // before the server has fully cleaned up the previous connection
+    delay(100);
+    
+    // Check if BTstack is in a valid state before restarting advertising
+    Serial.println("BLE: Restarting advertising...");
+    
+    // Stop any existing advertising first (defensive)
+    BTstack.stopAdvertising();
+    delay(50);
+    
+    // Restart advertising - critical for device discoverability
+    BTstack.startAdvertising();
+    Serial.println("BLE: Advertising restarted successfully");
 }
 
 static uint16_t gattReadCallback(uint16_t characteristic_id, uint8_t *buffer, uint16_t buffer_size)
@@ -439,15 +632,37 @@ static uint16_t gattReadCallback(uint16_t characteristic_id, uint8_t *buffer, ui
 
 static int gattWriteCallback(uint16_t characteristic_handle, uint8_t *buffer, uint16_t size)
 {
+    // Ignore writes to handle 0 or with size 0 (invalid/cleanup writes during disconnect)
+    if (characteristic_handle == 0 || size == 0) {
+        return 0; // Success - silently ignore
+    }
+    
     Serial.print("BLE: Write callback called - Handle: ");
     Serial.print(characteristic_handle);
     Serial.print(", size: ");
     Serial.println(size);
     
-    if (!BLEManager::_instance || !buffer)
+    if (!BLEManager::_instance)
     {
-        Serial.println("BLE: Write callback - instance or buffer is null!");
+        Serial.println("BLE: Write callback - instance is null!");
         return 1; // Error
+    }
+    
+    if (!buffer)
+    {
+        Serial.println("BLE: Write callback - buffer is null!");
+        return 1; // Error
+    }
+    
+    // Silently ignore CCCD writes (handles 4, 7, 16 are notification descriptors)
+    // These are 2-byte writes to enable/disable notifications
+    if (size == 2) {
+        // Check if this looks like a CCCD write (enable=0x0001, disable=0x0000)
+        uint16_t value = buffer[0] | (buffer[1] << 8);
+        if (value == 0x0001 || value == 0x0000) {
+            // This is a CCCD write to enable/disable notifications - ignore it
+            return 0; // Success
+        }
     }
 
     // Compare against handles, not IDs
