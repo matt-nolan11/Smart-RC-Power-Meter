@@ -243,12 +243,10 @@ void BLEManager::update()
         return;
     }
     
-    // Connection watchdog - detect stale connections
-    // If we're "connected" but haven't received any data for CONNECTION_TIMEOUT_MS,
-    // force a disconnect and restart advertising. This handles cases where:
-    // 1. Web app disconnects without properly closing the connection
-    // 2. Browser caches a stale connection
-    // 3. Connection enters a bad state
+    // Connection watchdog - DISABLED to allow idle connections
+    // The initialization timeout (5s) is sufficient to catch incomplete connections
+    // Idle users should be able to stay connected without interaction
+    /*
     if (_connected && (millis() - _last_activity_ms > CONNECTION_TIMEOUT_MS)) {
         Serial.println("BLE: WARNING - Connection timeout detected (no activity for 30s)");
         Serial.println("BLE: Forcing disconnect and cleanup");
@@ -285,6 +283,7 @@ void BLEManager::update()
         // Exit immediately - advertising restart will happen at start of next update() call
         return;
     }
+    */
 }
 
 bool BLEManager::isConnected()
