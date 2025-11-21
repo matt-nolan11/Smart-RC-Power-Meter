@@ -291,6 +291,32 @@ bool BLEManager::isConnected()
     return _connected;
 }
 
+void BLEManager::forceDisconnect()
+{
+    if (!_connected) return;
+    
+    Serial.println("BLE: Force disconnect requested");
+    
+    // Disconnect at BTstack level if we have a connection handle
+    if (_connection_handle != 0)
+    {
+        gap_disconnect(_connection_handle);
+    }
+    
+    // Reset all state immediately (don't wait for callback)
+    _connected = false;
+    _connection_handle = 0;
+    _initialization_complete = false;
+    _new_config_available = false;
+    _new_command_available = false;
+    _new_dshot_command_available = false;
+    
+    // Set flag to restart advertising on next update() cycle
+    _restart_advertising_pending = true;
+    
+    Serial.println("BLE: Force disconnect complete");
+}
+
 void BLEManager::sendPWMData(float voltage, float current, float throttle, BatteryState battery_state)
 {
     if (!isConnected())

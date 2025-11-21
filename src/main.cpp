@@ -114,7 +114,22 @@ void loop()
 
   // Handle BLE disconnect - stop ESC for safety
   static bool was_connected = false;
+  static unsigned long last_ble_activity = millis();
   bool is_connected = bleManager.isConnected();
+  
+  // Watchdog check happens BEFORE processing to detect stale connections
+  // But we update activity timestamp DURING command processing (see below)
+  if (is_connected && (millis() - last_ble_activity > 5000))
+  {
+#if ENABLE_SERIAL_DEBUG
+    Serial.println("BLE WATCHDOG: No activity for 5s - forcing disconnect for safety!");
+#endif
+    // Actually disconnect the BLE connection
+    bleManager.forceDisconnect();
+    is_connected = false;
+    last_ble_activity = millis(); // Reset timer immediately to prevent rapid triggering
+  }
+  
   if (was_connected && !is_connected)
   {
     // Connection lost - disconnect ESC immediately for safety
@@ -133,6 +148,8 @@ void loop()
   // Check for new ESC configuration
   if (bleManager.hasNewConfig())
   {
+    last_ble_activity = millis(); // Update watchdog timer
+    
     const ESCConfigPacket& config = bleManager.getESCConfig();
 
     // Store current mode for packet selection
@@ -188,6 +205,8 @@ void loop()
   // Check for new ESC commands
   if (bleManager.hasNewCommand())
   {
+    last_ble_activity = millis(); // Update watchdog timer (includes PING heartbeat)
+    
     const ESCCommandPacket& command = bleManager.getESCCommand();
     const ESCConfigPacket& config = bleManager.getESCConfig();
 
@@ -205,6 +224,11 @@ void loop()
 #if ENABLE_SERIAL_DEBUG
       Serial.println("ESC: Disconnected");
 #endif
+    }
+    else if (command.command == 4) // PING (heartbeat from web app)
+    {
+      // Just acknowledge - no action needed, this keeps BLE watchdog alive
+      // Don't log to avoid flooding serial output
     }
     else if (command.command == 1) // START or throttle update
     {
@@ -265,77 +289,29 @@ void loop()
     bleManager.clearCommandFlag();
   }
 
-  // Check for new DSHOT special commands
+  // Handle DSHOT special commands (beeps, direction, settings, etc.)
   if (bleManager.hasNewDSHOTCommand())
   {
+    last_ble_activity = millis(); // Update watchdog timer
+    
     uint8_t command = bleManager.getDSHOTCommand();
     
 #if ENABLE_SERIAL_DEBUG
-    Serial.print("DSHOT: Received special command ");
+    Serial.print("DSHOT: Sending special command: ");
     Serial.println(command);
 #endif
-
-    // Check if ESC is connected
-    if (!esc.isConnected())
+    
+    // Send command 6 times as per DSHOT protocol
+    if (esc.isConnected())
+    {
+      esc.sendDshotCommand((ESC::dshotCommand)command, 6);
+      bleManager.sendDSHOTResponse(0, nullptr, 0); // Send ACK
+    }
+    else
     {
 #if ENABLE_SERIAL_DEBUG
       Serial.println("DSHOT: Command rejected - ESC not connected");
 #endif
-      bleManager.clearDSHOTCommandFlag();
-      return;
-    }
-
-    // Handle different DSHOT command types
-    if (command >= 1 && command <= 5) 
-    {
-      // Beep commands (1-5)
-      esc.sendDshotCommand((ESC::dshotCommand)command, 6);
-      
-      // Send acknowledgment
-      bleManager.sendDSHOTResponse(0, nullptr, 0);
-    }
-    else if (command == 6) 
-    {
-      // ESC Info request
-      // Send the command to the ESC (requires multiple telemetry frames to respond)
-      esc.sendDshotCommand(ESC::DSHOT_CMD_ESC_INFO, 10);
-      
-      // Response format: [firmware_version, rotation_direction, 3d_mode]
-      // Note: Actual info comes via telemetry over time, this is just an acknowledgment
-      uint8_t info[3];
-      info[0] = 1;  // Firmware version placeholder (actual value comes via telemetry)
-      info[1] = 0;  // Rotation direction (0=normal, 1=reversed)
-      info[2] = 0;  // 3D mode (0=off, 1=on)
-      
-      bleManager.sendDSHOTResponse(1, info, 3);
-      
-#if ENABLE_SERIAL_DEBUG
-      Serial.println("DSHOT: ESC Info request sent (response may take several seconds)");
-#endif
-    }
-    else if (command == 7 || command == 8 || command == 20 || command == 21)
-    {
-      // Direction control
-      esc.sendDshotCommand((ESC::dshotCommand)command, 6);
-      bleManager.sendDSHOTResponse(0, nullptr, 0);
-    }
-    else if (command == 9 || command == 10)
-    {
-      // 3D Mode control
-      esc.sendDshotCommand((ESC::dshotCommand)command, 10);
-      bleManager.sendDSHOTResponse(0, nullptr, 0);
-    }
-    else if (command == 12)
-    {
-      // Save settings
-      esc.sendDshotCommand(ESC::DSHOT_CMD_SAVE_SETTINGS, 10);
-      bleManager.sendDSHOTResponse(0, nullptr, 0);
-    }
-    else if (command >= 22 && command <= 29)
-    {
-      // LED control
-      esc.sendDshotCommand((ESC::dshotCommand)command, 6);
-      bleManager.sendDSHOTResponse(0, nullptr, 0);
     }
     
     bleManager.clearDSHOTCommandFlag();
@@ -347,6 +323,43 @@ void loop()
 
   // Update ESC ramp (if enabled, gradually changes throttle)
   esc.updateRamp();
+  
+  // CRITICAL: DSHOT requires continuous throttle packets (>500Hz recommended)
+  // ESC will timeout and disarm if packets stop for ~10ms
+  // Send current throttle (or 0 if stopped) on EVERY loop iteration
+  if (esc.isConnected() && current_esc_mode == 1) // DSHOT mode
+  {
+    // Debug: Calculate actual loop rate
+    static unsigned long last_loop_time = 0;
+    static unsigned long loop_count = 0;
+    static unsigned long rate_check_time = 0;
+    
+    loop_count++;
+    unsigned long now = micros();
+    
+    // Print loop rate every second
+    if (now - rate_check_time >= 1000000)
+    {
+      float actual_rate = loop_count / ((now - rate_check_time) / 1000000.0f);
+      Serial.print("DSHOT Loop Rate: ");
+      Serial.print(actual_rate, 0);
+      Serial.print(" Hz (avg period: ");
+      Serial.print(1000000.0f / actual_rate, 0);
+      Serial.println(" us)");
+      
+      loop_count = 0;
+      rate_check_time = now;
+    }
+    
+    // Always send throttle to keep ESC alive (even if stopped)
+    esc.sendThrottle();
+    
+    // Read telemetry every loop for bidirectional DSHOT
+    esc.readTelemetry();
+    
+    // Add small delay to maintain proper DSHOT timing (~5kHz rate = 200us)
+    delayMicroseconds(200);
+  }
 
   // Battery protection monitoring
   const ESCConfigPacket& config = bleManager.getESCConfig();
@@ -389,13 +402,15 @@ void loop()
         // First time below cutoff - start timer
         battery_below_cutoff = true;
         battery_below_cutoff_time = millis();
+        // Maintain current state during debounce period
+        new_state = battery_state;
       }
       else if (millis() - battery_below_cutoff_time >= BATTERY_STATE_DEBOUNCE_MS)
       {
         // Sustained below cutoff for debounce period - trigger cutoff
+        new_state = BLEManager::BatteryState::CUTOFF;
         if (battery_state != BLEManager::BatteryState::CUTOFF)
         {
-          new_state = BLEManager::BatteryState::CUTOFF;
           // Stop ESC if running
           if (esc_running)
           {
@@ -407,13 +422,24 @@ void loop()
           }
         }
       }
+      else
+      {
+        // Still debouncing - maintain current state
+        new_state = battery_state;
+      }
     }
     else if (sensor_voltage < cutoff_recovery)
     {
-      // Between cutoff and recovery threshold - maintain current state if CUTOFF
+      // Between cutoff and recovery threshold - maintain CUTOFF state
+      // This prevents flickering when voltage hovers in hysteresis zone
       if (battery_state == BLEManager::BatteryState::CUTOFF)
       {
         new_state = BLEManager::BatteryState::CUTOFF;
+      }
+      else
+      {
+        // If not yet in CUTOFF state, maintain current state (don't change)
+        new_state = battery_state;
       }
       battery_below_cutoff = false;  // Reset debounce timer
     }
@@ -433,25 +459,38 @@ void loop()
           // First time below warning - start timer
           battery_below_warning = true;
           battery_below_warning_time = millis();
+          // Maintain current state during debounce period
+          new_state = battery_state;
         }
         else if (millis() - battery_below_warning_time >= BATTERY_STATE_DEBOUNCE_MS)
         {
           // Sustained below warning for debounce period
+          new_state = BLEManager::BatteryState::WARNING;
           if (battery_state != BLEManager::BatteryState::WARNING)
           {
-            new_state = BLEManager::BatteryState::WARNING;
 #if ENABLE_SERIAL_DEBUG
             Serial.println("Battery protection: Warning threshold reached (debounced)");
 #endif
           }
         }
+        else
+        {
+          // Still debouncing - maintain current state
+          new_state = battery_state;
+        }
       }
       else if (sensor_voltage < warning_recovery)
       {
-        // Between warning and recovery threshold - maintain current state if WARNING
+        // Between warning and recovery threshold - maintain WARNING state
+        // This prevents flickering when voltage hovers in hysteresis zone
         if (battery_state == BLEManager::BatteryState::WARNING)
         {
           new_state = BLEManager::BatteryState::WARNING;
+        }
+        else
+        {
+          // If not yet in WARNING state, maintain current state (don't change)
+          new_state = battery_state;
         }
         battery_below_warning = false;  // Reset debounce timer
       }

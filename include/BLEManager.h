@@ -40,6 +40,9 @@ public:
     /// @return true if connected
     bool isConnected();
 
+    /// @brief Force disconnect (for watchdog/error conditions)
+    void forceDisconnect();
+
     /// @brief Send PWM mode data packet
     /// @param voltage Battery voltage in volts
     /// @param current Current in amps

@@ -100,11 +100,6 @@ public:
     /// @return True if ESC is connected and outputting signals
     bool isConnected() const;
 
-    /// @brief Send a special DSHOT command (only works in DSHOT mode)
-    /// @param command The DSHOT command to send (use dshotCommand enum)
-    /// @param repeat_count Number of times to send the command (default 1, some commands need 10+)
-    void sendDshotCommand(dshotCommand command, uint8_t repeat_count = 1);
-
     /// @brief Getter method for the internally stored telemetry data
     telemData getTelemetry(); // Returns the telemetry data struct
 
@@ -120,6 +115,18 @@ public:
     void setRampRates(uint16_t up_rate, uint16_t down_rate, bool up_enabled, bool down_enabled); // Sets ramp up/down rates (%/second) and enable states
     void updateRamp(); // Updates ramp state - must be called regularly in main loop
     void resetThrottle(); // Resets actual throttle to 0 (for ramping from stopped state)
+    
+    /// @brief Send current throttle to ESC (DSHOT: must be called continuously >500Hz to keep ESC alive)
+    void sendThrottle(); // Public wrapper for sendThrottleInternal()
+    
+    /// @brief Read telemetry from ESC (DSHOT bidirectional mode only)
+    /// Should be called regularly in main loop to update internal telemetry data
+    void readTelemetry(); // Public wrapper for updateTelemetry()
+
+    /// @brief Send DSHOT special command (beeps, direction, settings, etc.)
+    /// @param command The DSHOT special command to send (0-47)
+    /// @param repeat_count Number of times to repeat the command (default 6)
+    void sendDshotCommand(dshotCommand command, uint8_t repeat_count = 6);
 
 
 private:

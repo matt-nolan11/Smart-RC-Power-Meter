@@ -115,7 +115,9 @@ uint16_t ESC::percentToDshotValue(float percent)
         else
         {
             // Map 0.5-100% to 48-2047 (skip command range)
-            return DSHOT_MIN_THROTTLE + (uint16_t)((percent / 100.0f) * DSHOT_THROTTLE_RANGE);
+            // Subtract 0.5 and scale by 99.5% range to properly distribute values
+            float normalized = (percent - 0.5f) / 99.5f;  // 0.0 to 1.0
+            return DSHOT_MIN_THROTTLE + (uint16_t)(normalized * DSHOT_THROTTLE_RANGE);
         }
     }
     else // BIDIRECTIONAL (3D Mode)
@@ -137,12 +139,14 @@ uint16_t ESC::percentToDshotValue(float percent)
         {
             // Map -100 to -0.5% → 48 to 1047
             float abs_percent = -percent; // Make positive
-            return DSHOT_REVERSE_MIN + (uint16_t)((abs_percent / 100.0f) * DSHOT_REVERSE_RANGE);
+            float normalized = (abs_percent - 0.5f) / 99.5f;  // 0.0 to 1.0
+            return DSHOT_REVERSE_MIN + (uint16_t)(normalized * DSHOT_REVERSE_RANGE);
         }
         else if (percent > 0.5f) // Forward (with small deadband)
         {
             // Map 0.5 to 100% → 1049 to 2047
-            return DSHOT_FORWARD_MIN + (uint16_t)((percent / 100.0f) * DSHOT_FORWARD_RANGE);
+            float normalized = (percent - 0.5f) / 99.5f;  // 0.0 to 1.0
+            return DSHOT_FORWARD_MIN + (uint16_t)(normalized * DSHOT_FORWARD_RANGE);
         }
         else
         {
@@ -158,35 +162,27 @@ void ESC::sendThrottleInternal()
     {
         uint16_t dshot_value = percentToDshotValue(_actual_throttle);
         _dshot->sendThrottle(dshot_value);
-        updateTelemetry();
+        
+        // Debug: Print throttle changes (only when value changes significantly)
+        static uint16_t last_printed_value = 0;
+        static float last_printed_percent = 0.0f;
+        if (abs(dshot_value - last_printed_value) > 10 || abs(_actual_throttle - last_printed_percent) > 1.0f)
+        {
+            Serial.print("DSHOT: ");
+            Serial.print(_actual_throttle, 2);
+            Serial.print("% -> ");
+            Serial.println(dshot_value);
+            last_printed_value = dshot_value;
+            last_printed_percent = _actual_throttle;
+        }
+        
+        // Note: Telemetry is read separately in updateTelemetry() which should be called regularly
     }
     else if (_mode == escMode::PWM)
     {
         uint16_t pwm_microseconds = percentToPwmMicroseconds(_actual_throttle);
         _pwm.writeMicroseconds(pwm_microseconds);
     }
-}
-
-void ESC::sendDshotCommand(dshotCommand command, uint8_t repeat_count)
-{
-    if (_mode != escMode::DSHOT || _dshot == nullptr)
-    {
-        Serial.println("ERROR: DSHOT commands only work in DSHOT mode");
-        return;
-    }
-    
-    // Send the command the specified number of times
-    for (uint8_t i = 0; i < repeat_count; i++)
-    {
-        _dshot->sendThrottle(static_cast<uint16_t>(command));
-        delay(1); // Small delay between command repetitions
-    }
-    
-    Serial.print("Sent DSHOT command ");
-    Serial.print(static_cast<uint16_t>(command));
-    Serial.print(" (");
-    Serial.print(repeat_count);
-    Serial.println("x)");
 }
 
 void ESC::setMode(escMode mode)
@@ -362,8 +358,7 @@ void ESC::updateRamp()
         }
     }
     
-    // Send updated throttle to ESC
-    sendThrottleInternal();
+    // Don't send here - let main loop handle sending at controlled rate
     _telemetry.throttle = _actual_throttle;
 }
 
@@ -402,7 +397,13 @@ void ESC::stop()
 
 void ESC::connect()
 {
-    if (_connected) return; // Already connected
+    if (_connected) 
+    {
+        Serial.println("ESC: Already connected - ignoring connect request");
+        return;
+    }
+    
+    Serial.println("ESC: Connecting...");
     
     // Initialize signal output based on current mode
     if (_mode == escMode::PWM)
@@ -413,7 +414,12 @@ void ESC::connect()
     {
         if (_dshot == nullptr)
         {
+            Serial.println("ESC: Creating new DSHOT object");
             _dshot = new BidirDShotX1(_signal_pin, static_cast<int>(_dshot_speed));
+        }
+        else
+        {
+            Serial.println("ESC: Reusing existing DSHOT object");
         }
     }
     
@@ -421,14 +427,53 @@ void ESC::connect()
     
     // Send stop command to ensure ESC starts in safe state
     stop();
+    
+    // DSHOT arming sequence: Send command 0 (stop) for ~300ms
+    // This is required by most ESC firmware before accepting throttle
+    if (_mode == escMode::DSHOT && _dshot != nullptr)
+    {
+        Serial.println("ESC: Starting DSHOT arming sequence (300ms)...");
+        unsigned long arm_start = millis();
+        while (millis() - arm_start < 300)
+        {
+            _dshot->sendThrottle(0); // Send stop command
+            delayMicroseconds(200);  // ~5kHz rate as recommended
+        }
+        Serial.println("ESC: DSHOT arming complete - ready for throttle");
+        
+        // Enable extended telemetry (command 13, requires sending 10 times)
+        // This enables voltage, current, temperature, and stress telemetry
+        Serial.println("ESC: Enabling extended telemetry...");
+        for (int i = 0; i < 10; i++)
+        {
+            _dshot->sendThrottle(13);
+            delayMicroseconds(200); // Wait for telemetry response timing
+            
+            // Read telemetry to maintain bidirectional communication
+            updateTelemetry();
+            
+            delayMicroseconds(800); // Complete 1ms cycle
+        }
+        Serial.println("ESC: Extended telemetry enabled");
+    }
 }
 
 void ESC::disconnect()
 {
     if (!_connected) return; // Already disconnected
     
+    Serial.println("ESC: Disconnecting...");
+    
     // Send stop command before disconnecting
     stop();
+    
+    // Reset throttle state completely
+    _commanded_throttle = 0.0f;
+    _actual_throttle = 0.0f;
+    _last_ramp_update = millis();
+    
+    // Clear telemetry data
+    _telemetry = telemData{};
     
     // Cleanup signal output
     if (_mode == escMode::PWM)
@@ -437,11 +482,23 @@ void ESC::disconnect()
     }
     else if (_mode == escMode::DSHOT && _dshot != nullptr)
     {
+        // Send a few more stop commands before deleting
+        for (int i = 0; i < 5; i++)
+        {
+            _dshot->sendThrottle(0);
+            delayMicroseconds(200);
+        }
+        
         delete _dshot;
         _dshot = nullptr;
     }
     
+    // CRITICAL: Set signal pin to INPUT to stop all output
+    // This ensures no spurious signals are sent to ESC after disconnect
+    pinMode(_signal_pin, INPUT);
+    
     _connected = false;
+    Serial.println("ESC: Disconnect complete - signal pin set to INPUT");
 }
 
 bool ESC::isConnected() const
@@ -457,6 +514,20 @@ ESC::telemData ESC::getTelemetry()
 float ESC::getActualThrottle() const
 {
     return _actual_throttle;
+}
+
+void ESC::sendThrottle()
+{
+    // Public wrapper - sends current throttle value to ESC
+    // For DSHOT: This MUST be called continuously (>500Hz) or ESC will timeout
+    sendThrottleInternal();
+}
+
+void ESC::readTelemetry()
+{
+    // Public wrapper - reads telemetry from ESC
+    // For DSHOT bidirectional mode: Should be called every loop iteration
+    updateTelemetry();
 }
 
 void ESC::updateTelemetry()
@@ -501,5 +572,26 @@ void ESC::updateTelemetry()
         // No telemetry packet available. Either the wait time between writing the last DShot packet and reading the telemetry packet was too short, or the ESC is not powered. This is not a problem, just ignore it.
     default:
         break;
+    }
+}
+
+void ESC::sendDshotCommand(dshotCommand command, uint8_t repeat_count)
+{
+    if (_mode != escMode::DSHOT || !_connected || _dshot == nullptr)
+    {
+        return; // DSHOT commands only work in DSHOT mode when connected
+    }
+
+    // Send the special command multiple times as required by DSHOT protocol
+    // Most commands need to be sent 6-10 times to be registered by ESC
+    for (uint8_t i = 0; i < repeat_count; i++)
+    {
+        _dshot->sendThrottle(command);
+        delayMicroseconds(200); // Wait for telemetry response timing
+        
+        // Read telemetry to maintain bidirectional communication
+        updateTelemetry();
+        
+        delayMicroseconds(800); // Complete 1ms cycle
     }
 }
