@@ -3,6 +3,7 @@
 #include <CurrentSensor.h>
 #include <ESC.h>
 #include <BLEManager.h>
+#include <hardware/watchdog.h>  // For hardware reset via watchdog
 
 // Disable serial output for maximum performance
 #define ENABLE_SERIAL_DEBUG 1
@@ -117,17 +118,47 @@ void loop()
   static unsigned long last_ble_activity = millis();
   bool is_connected = bleManager.isConnected();
   
-  // Watchdog check happens BEFORE processing to detect stale connections
-  // But we update activity timestamp DURING command processing (see below)
-  if (is_connected && (millis() - last_ble_activity > 5000))
+  // Reset activity timer on new connection
+  if (!was_connected && is_connected)
+  {
+    last_ble_activity = millis();
+#if ENABLE_SERIAL_DEBUG
+    Serial.println("BLE: New connection - reset activity timer");
+#endif
+  }
+  
+  // Activity watchdog - detect stale connections that stop sending data
+  // Heartbeat keeps connection alive (updates last_ble_activity every 2s)
+  if (is_connected && (millis() - last_ble_activity > 4000))
   {
 #if ENABLE_SERIAL_DEBUG
-    Serial.println("BLE WATCHDOG: No activity for 5s - forcing disconnect for safety!");
+    Serial.println("BLE WATCHDOG: No activity for 4s - forcing disconnect for safety!");
 #endif
-    // Actually disconnect the BLE connection
+    
+    // Disconnect ESC immediately for safety
+    if (esc.isConnected())
+    {
+      esc.disconnect();
+      esc_running = false;
+#if ENABLE_SERIAL_DEBUG
+      Serial.println("BLE WATCHDOG: ESC disconnected and stopped");
+#endif
+    }
+    
+    // Force BLE disconnect
     bleManager.forceDisconnect();
     is_connected = false;
-    last_ble_activity = millis(); // Reset timer immediately to prevent rapid triggering
+    
+#if ENABLE_SERIAL_DEBUG
+    Serial.println("BLE WATCHDOG: Triggering hardware reset to clear BTstack state");
+    Serial.flush();
+#endif
+    
+    delay(100);  // Brief delay for serial output
+    
+    // Trigger hardware reset via watchdog (1ms timeout)
+    watchdog_enable(1, false);
+    while(1);  // Wait for watchdog reset
   }
   
   if (was_connected && !is_connected)

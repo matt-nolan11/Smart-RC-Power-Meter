@@ -121,12 +121,28 @@ public:
     /// @brief Get the DSHOT command write characteristic handle
     /// @return The handle for the DSHOT command write characteristic
     uint16_t getDSHOTCommandWriteHandle() const { return _dshot_command_write_handle; }
+    
+    /// @brief Check if BTstack restart is in progress
+    /// @return true if restart sequence is active
+    bool isRestartInProgress() const { return _restart_in_progress; }
+    
+    /// @brief Set notification enabled state for a characteristic
+    /// @param type 0=data, 1=battery, 2=dshot_response
+    /// @param enabled true to enable, false to disable
+    void setNotificationState(uint8_t type, bool enabled);
+    
+    /// @brief Check if all notifications are disabled (graceful disconnect signal)
+    /// @return true if all notifications are disabled
+    bool allNotificationsDisabled() const;
 
     // Internal methods for BLE callbacks (public for callback access)
     void onConnectionStatusChanged(uint16_t conn_handle, uint8_t status);
     void onConfigWrite(uint16_t conn_handle, uint8_t* data, uint16_t len);
     void onCommandWrite(uint16_t conn_handle, uint8_t* data, uint16_t len);
     void onDSHOTCommandWrite(uint16_t conn_handle, uint8_t* data, uint16_t len);
+    
+    /// @brief Initiate graceful disconnect sequence (public for callback access)
+    void initiateGracefulDisconnect();
 
     // Singleton instance for callbacks (needs public access for callbacks)
     static BLEManager* _instance;
@@ -158,8 +174,25 @@ private:
     bool _initialization_complete;
     static constexpr unsigned long INIT_TIMEOUT_MS = 5000; // 5 seconds
     
-    // Deferred advertising restart flag (set when timeout forces disconnect)
-    bool _restart_advertising_pending;
+    // Graceful disconnect flag - set when all CCCDs disabled, cleared when HCI disconnect completes
+    bool _graceful_disconnect_pending;
+    
+    // Forced disconnect flag - set when watchdog forces disconnect (incomplete/stale connection)
+    bool _forced_disconnect_pending;
+    
+    // Awaiting disconnect callback flag - set when gap_disconnect called, cleared when callback fires
+    // This is separate from _connected because we clear _connected immediately to prevent watchdog loops
+    bool _awaiting_disconnect_callback;
+    unsigned long _disconnect_initiated_ms;  // Timestamp when gap_disconnect() was called
+    static constexpr unsigned long DISCONNECT_CALLBACK_TIMEOUT_MS = 500;  // Max wait for callback
+    
+    // Flag to prevent accepting connections during restart (avoids race conditions)
+    bool _restart_in_progress;
+    
+    // CCCD (notification) tracking for graceful disconnect detection
+    bool _data_notifications_enabled;
+    bool _battery_notifications_enabled;
+    bool _dshot_response_notifications_enabled;
 
     // GATT attribute handles
     uint16_t _data_notification_handle;
@@ -168,4 +201,10 @@ private:
     uint16_t _command_write_handle;
     uint16_t _dshot_command_write_handle;
     uint16_t _dshot_response_handle;
+    
+    // Internal cleanup method
+    void resetConnectionState();
+    
+    // Internal GATT setup method (called by begin() and during reset)
+    void setupGATTServices();
 };
