@@ -11,6 +11,7 @@
 #include <Arduino.h>
 #include <PIO_DShot.h>
 #include <Servo.h>
+#include <hardware/gpio.h>  // For explicit GPIO control during cleanup
 
 class ESC
 {

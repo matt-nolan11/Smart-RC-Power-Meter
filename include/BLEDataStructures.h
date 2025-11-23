@@ -48,11 +48,12 @@ struct DSHOTDataPacket
 
 /// @brief ESC configuration packet
 /// @details Settings sent from web app to device
-/// Total size: 19 bytes
+/// Total size: 21 bytes
 struct ESCConfigPacket
 {
     uint8_t mode;           // 0 = PWM, 1 = DSHOT (1 byte)
     uint8_t esc_type;       // 0 = Unidirectional, 1 = Bidirectional (1 byte)
+    uint16_t dshot_speed;   // DSHOT speed: 150, 300, 600, 1200, 2400 (2 bytes)
     uint16_t throttle_min;  // Minimum throttle in microseconds (2 bytes)
     uint16_t throttle_max;  // Maximum throttle in microseconds (2 bytes)
     uint16_t ramp_up_rate;  // Ramp up rate in μs/second (2 bytes)
@@ -89,6 +90,6 @@ struct ESCCommandPacket
 // Verify struct sizes at compile time
 static_assert(sizeof(PWMDataPacket) == 13, "PWMDataPacket must be 13 bytes");
 static_assert(sizeof(DSHOTDataPacket) == 31, "DSHOTDataPacket must be 31 bytes");
-static_assert(sizeof(ESCConfigPacket) == 19, "ESCConfigPacket must be 19 bytes");
+static_assert(sizeof(ESCConfigPacket) == 21, "ESCConfigPacket must be 21 bytes");
 static_assert(sizeof(BatteryStatusPacket) == 5, "BatteryStatusPacket must be 5 bytes");
 static_assert(sizeof(ESCCommandPacket) == 5, "ESCCommandPacket must be 5 bytes");

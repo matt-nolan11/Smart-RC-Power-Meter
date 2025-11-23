@@ -97,8 +97,10 @@ void setup()
 
   // Set default ESC configuration
   // Note: ESC will not output any signals until connect() is called
-  esc.setMode(ESC::escMode::PWM);
-  esc.setEscType(ESC::escType::UNIDIRECTIONAL);
+  esc.setMode(ESC::escMode::DSHOT);
+  esc.setDshotSpeed(ESC::dshotSpeed::DSHOT600);
+  esc.setEscType(ESC::escType::BIDIRECTIONAL);
+  esc.setMotorPoles(7); // Default for common motors
 
 #if ENABLE_SERIAL_DEBUG
   Serial.println("Initialization complete");
@@ -190,6 +192,26 @@ void loop()
     esc.setMode(config.mode == 0 ? ESC::escMode::PWM : ESC::escMode::DSHOT);
     esc.setEscType(config.esc_type == 0 ? ESC::escType::UNIDIRECTIONAL : ESC::escType::BIDIRECTIONAL);
     esc.setMotorPoles(config.motor_poles);
+    
+    // Set DSHOT speed if in DSHOT mode
+    if (config.mode == 1) // DSHOT mode
+    {
+      ESC::dshotSpeed speed;
+      switch(config.dshot_speed) {
+        case 150: speed = ESC::dshotSpeed::DSHOT150; break;
+        case 300: speed = ESC::dshotSpeed::DSHOT300; break;
+        case 600: speed = ESC::dshotSpeed::DSHOT600; break;
+        case 1200: speed = ESC::dshotSpeed::DSHOT1200; break;
+        case 2400: speed = ESC::dshotSpeed::DSHOT2400; break;
+        default: speed = ESC::dshotSpeed::DSHOT600; break; // Default to DSHOT600
+      }
+      esc.setDshotSpeed(speed);
+#if ENABLE_SERIAL_DEBUG
+      Serial.print("ESC: DSHOT speed configured to ");
+      Serial.println(config.dshot_speed);
+#endif
+    }
+    
     esc.setThrottleRange(config.throttle_min, config.throttle_max);
     esc.setRampRates(config.ramp_up_rate, config.ramp_down_rate, config.ramp_up_enabled == 1, config.ramp_down_enabled == 1);
 

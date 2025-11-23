@@ -233,13 +233,7 @@ void ESC::setEscType(escType type)
 void ESC::setDshotSpeed(dshotSpeed speed)
 {
     _dshot_speed = speed;
-    
-    // If already in DSHOT mode, reinitialize with new speed
-    if (_mode == escMode::DSHOT && _dshot != nullptr)
-    {
-        delete _dshot;
-        _dshot = new BidirDShotX1(_signal_pin, static_cast<int>(speed));
-    }
+    // Note: DSHOT object will be recreated with new speed on next connect()
 }
 
 void ESC::setThrottleRange(uint16_t min, uint16_t max)
@@ -412,15 +406,15 @@ void ESC::connect()
     }
     else if (_mode == escMode::DSHOT)
     {
-        if (_dshot == nullptr)
+        // Always recreate DSHOT object to ensure clean PIO state
+        // This is especially important after speed changes
+        if (_dshot != nullptr)
         {
-            Serial.println("ESC: Creating new DSHOT object");
-            _dshot = new BidirDShotX1(_signal_pin, static_cast<int>(_dshot_speed));
+            delete _dshot;
         }
-        else
-        {
-            Serial.println("ESC: Reusing existing DSHOT object");
-        }
+        Serial.print("ESC: Creating DSHOT object at speed ");
+        Serial.println(static_cast<int>(_dshot_speed));
+        _dshot = new BidirDShotX1(_signal_pin, static_cast<int>(_dshot_speed));
     }
     
     _connected = true;
@@ -428,33 +422,35 @@ void ESC::connect()
     // Send stop command to ensure ESC starts in safe state
     stop();
     
-    // DSHOT arming sequence: Send command 0 (stop) for ~300ms
-    // This is required by most ESC firmware before accepting throttle
+    // DSHOT initialization sequence
     if (_mode == escMode::DSHOT && _dshot != nullptr)
     {
-        Serial.println("ESC: Starting DSHOT arming sequence (300ms)...");
+        // Step 1: DSHOT arming sequence - send throttle 0 for ~1 second
+        // This is required by most ESC firmware before accepting throttle
+        Serial.println("ESC: Starting DSHOT arming sequence (1000ms of throttle=0)...");
         unsigned long arm_start = millis();
-        while (millis() - arm_start < 300)
+        while (millis() - arm_start < 1000)
         {
-            _dshot->sendThrottle(0); // Send stop command
-            delayMicroseconds(200);  // ~5kHz rate as recommended
+            _dshot->sendThrottle(0);
+            delay(1);
         }
-        Serial.println("ESC: DSHOT arming complete - ready for throttle");
+        Serial.println("ESC: DSHOT arming complete");
         
-        // Enable extended telemetry (command 13, requires sending 10 times)
-        // This enables voltage, current, temperature, and stress telemetry
-        Serial.println("ESC: Enabling extended telemetry...");
-        for (int i = 0; i < 10; i++)
+        // Step 2: Enable extended telemetry (command 13) if bidirectional
+        if (_esc_type == escType::BIDIRECTIONAL)
         {
-            _dshot->sendThrottle(13);
-            delayMicroseconds(200); // Wait for telemetry response timing
-            
-            // Read telemetry to maintain bidirectional communication
-            updateTelemetry();
-            
-            delayMicroseconds(800); // Complete 1ms cycle
+            Serial.println("ESC: Enabling extended telemetry (command 13 for 500ms)...");
+            unsigned long edt_start = millis();
+            while (millis() - edt_start < 500)
+            {
+                _dshot->sendRaw11Bit(13);
+                delayMicroseconds(200);
+                updateTelemetry();
+                delay(1);
+            }
+            Serial.println("ESC: Extended telemetry enabled");
         }
-        Serial.println("ESC: Extended telemetry enabled");
+        Serial.println("ESC: Ready for throttle");
     }
 }
 
@@ -482,19 +478,34 @@ void ESC::disconnect()
     }
     else if (_mode == escMode::DSHOT && _dshot != nullptr)
     {
-        // Send a few more stop commands before deleting
-        for (int i = 0; i < 5; i++)
+        // Send extended stop sequence to ensure ESC disarms properly
+        // This is especially important at higher DSHOT speeds (1200/2400)
+        Serial.println("ESC: Sending extended stop sequence...");
+        for (int i = 0; i < 20; i++)
         {
             _dshot->sendThrottle(0);
-            delayMicroseconds(200);
+            delay(1);  // 1ms between sends for proper frame timing
         }
         
+        // Additional delay to let ESC process the disarm
+        delay(100);
+        
+        Serial.println("ESC: Stopping PIO and deleting DSHOT object...");
+        
+        // CRITICAL: Must break PIO control of the pin before deleting object
+        // Setting pinMode alone isn't enough - need to explicitly change GPIO function
+        gpio_set_function(_signal_pin, GPIO_FUNC_SIO);  // Set to software IO
+        gpio_set_dir(_signal_pin, GPIO_IN);              // Set as input
+        delay(10);  // Brief delay to ensure pin change takes effect
+        
+        // Now delete DSHOT object to clean up PIO state machine
         delete _dshot;
         _dshot = nullptr;
+        
+        Serial.println("ESC: DSHOT cleanup complete");
     }
     
-    // CRITICAL: Set signal pin to INPUT to stop all output
-    // This ensures no spurious signals are sent to ESC after disconnect
+    // Ensure pin is INPUT (redundant for DSHOT, but necessary for PWM)
     pinMode(_signal_pin, INPUT);
     
     _connected = false;
@@ -540,25 +551,70 @@ void ESC::updateTelemetry()
 
     uint32_t returnValue = 0; // Temporary variable to hold the raw telemetry value
     BidirDshotTelemetryType type = _dshot->getTelemetryPacket(&returnValue);
+    
+    // Debug: Print telemetry type and value every 100 successful reads
+    static uint16_t telem_count = 0;
+    static uint16_t telem_debug_interval = 100;
+    bool should_debug = false;
+    if (type != BidirDshotTelemetryType::NO_PACKET && type != BidirDshotTelemetryType::CHECKSUM_ERROR) {
+        telem_count++;
+        if (telem_count >= telem_debug_interval) {
+            should_debug = true;
+            telem_count = 0;
+        }
+    }
+    
     switch (type)
     {
     case BidirDshotTelemetryType::ERPM:
         _telemetry.rpm = returnValue / (_motor_poles / 2);
+        if (should_debug) {
+            Serial.print("TELEM: ERPM=");
+            Serial.print(returnValue);
+            Serial.print(" (RPM=");
+            Serial.print(_telemetry.rpm);
+            Serial.println(")");
+        }
         break;
     case BidirDshotTelemetryType::VOLTAGE:
         _telemetry.voltage = (float)returnValue / 4;
+        if (should_debug) {
+            Serial.print("TELEM: VOLTAGE raw=");
+            Serial.print(returnValue);
+            Serial.print(" (");
+            Serial.print(_telemetry.voltage);
+            Serial.println("V)");
+        }
         break;
     case BidirDshotTelemetryType::CURRENT:
         _telemetry.current = returnValue;
+        if (should_debug) {
+            Serial.print("TELEM: CURRENT=");
+            Serial.print(returnValue);
+            Serial.println("A");
+        }
         break;
     case BidirDshotTelemetryType::TEMPERATURE:
         _telemetry.temp = returnValue;
+        if (should_debug) {
+            Serial.print("TELEM: TEMP=");
+            Serial.print(returnValue);
+            Serial.println("°C");
+        }
         break;
     case BidirDshotTelemetryType::STATUS:
         _telemetry.lastStatus = returnValue;
+        if (should_debug) {
+            Serial.print("TELEM: STATUS=0x");
+            Serial.println(returnValue, HEX);
+        }
         break;
     case BidirDshotTelemetryType::STRESS:
         _telemetry.stress = returnValue & ESC_STATUS_MAX_STRESS_MASK;
+        if (should_debug) {
+            Serial.print("TELEM: STRESS=");
+            Serial.println(_telemetry.stress);
+        }
         break;
 
     // other possible cases are:
@@ -584,9 +640,10 @@ void ESC::sendDshotCommand(dshotCommand command, uint8_t repeat_count)
 
     // Send the special command multiple times as required by DSHOT protocol
     // Most commands need to be sent 6-10 times to be registered by ESC
+    // CRITICAL: Must use sendRaw11Bit() for special commands, NOT sendThrottle()!
     for (uint8_t i = 0; i < repeat_count; i++)
     {
-        _dshot->sendThrottle(command);
+        _dshot->sendRaw11Bit(command);  // Send raw command without telemetry bit
         delayMicroseconds(200); // Wait for telemetry response timing
         
         // Read telemetry to maintain bidirectional communication
